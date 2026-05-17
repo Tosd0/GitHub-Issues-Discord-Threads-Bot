@@ -80,7 +80,8 @@ export async function handleClientReady(client: Client) {
       await guild.commands.set([
         {
           name: "create-issue",
-          description: "Create a GitHub issue from this forum post.",
+          description:
+            "Create a GitHub issue from this forum post. (Admin only)",
           type: ApplicationCommandType.ChatInput,
           dmPermission: false,
         },
