@@ -51,17 +51,26 @@ function attachmentsToMarkdown(attachments: Collection<string, Attachment>) {
 
 function getIssueBody(params: Message) {
   const { guildId, channelId, id, content, author, attachments } = params;
-  const { globalName, avatar } = author;
+  const displayName = author.globalName ?? author.username;
+  const discordUrl = `https://discord.com/channels/${guildId}/${channelId}/${id}`;
+  const avatarImg = author.avatar
+    ? `<img src="https://cdn.discordapp.com/avatars/${author.id}/${author.avatar}.webp?size=40" width="20" height="20" align="absmiddle" /> `
+    : "";
+  const attachmentsMd = attachmentsToMarkdown(attachments);
 
-  return (
-    `<kbd>[![${globalName}](https://cdn.discordapp.com/avatars/${author.id}/${avatar}.webp?size=40)](https://discord.com/channels/${guildId}/${channelId}/${id})</kbd> [${globalName}](https://discord.com/channels/${guildId}/${channelId}/${id})  \`BOT\`\n\n` +
-    `${content}\n` +
-    `${attachmentsToMarkdown(attachments)}\n`
-  );
+  const sections = [
+    "> Generated from Discord",
+    `**From (Discord):** ${avatarImg}${displayName}`,
+    content,
+  ];
+  if (attachmentsMd) sections.push(attachmentsMd);
+  sections.push(discordUrl);
+
+  return sections.join("\n\n") + "\n";
 }
 
 const regexForDiscordCredentials =
-  /https:\/\/discord\.com\/channels\/(\d+)\/(\d+)\/(\d+)(?=\))/;
+  /https:\/\/discord\.com\/channels\/(\d+)\/(\d+)\/(\d+)/;
 export function getDiscordInfoFromGithubBody(body: string | null | undefined) {
   if (!body) return { channelId: undefined, id: undefined };
   const match = body.match(regexForDiscordCredentials);
