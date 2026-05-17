@@ -198,14 +198,25 @@ export async function notifySubscribers(
 
 export async function reactToThreadStarter(
   node_id: string | undefined,
-  emoji: string,
+  addEmoji: string,
+  removeEmoji?: string,
 ) {
   const { channel } = await getThreadChannel(node_id);
   if (!channel) return;
 
   try {
     const starter = await channel.fetchStarterMessage();
-    await starter?.react(emoji);
+    if (!starter) return;
+
+    if (removeEmoji) {
+      const reaction = starter.reactions.cache.get(removeEmoji);
+      const selfId = client.user?.id;
+      if (reaction && selfId) {
+        await reaction.users.remove(selfId).catch(() => undefined);
+      }
+    }
+
+    await starter.react(addEmoji);
   } catch (err) {
     /* starter message may be unavailable */
   }
