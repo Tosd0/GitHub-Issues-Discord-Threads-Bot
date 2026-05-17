@@ -177,6 +177,25 @@ export async function getThreadChannel(node_id: string | undefined): Promise<{
   return { thread, channel };
 }
 
+export async function notifySubscribers(
+  node_id: string | undefined,
+  message: string,
+) {
+  if (!node_id) return;
+
+  const thread = store.threads.find((t) => t.node_id === node_id);
+  if (!thread?.subscribers?.length) return;
+
+  for (const userId of thread.subscribers) {
+    try {
+      const user = await client.users.fetch(userId);
+      await user.send(message);
+    } catch (err) {
+      /* user may have DMs disabled or left the server */
+    }
+  }
+}
+
 export async function reactToThreadStarter(
   node_id: string | undefined,
   emoji: string,

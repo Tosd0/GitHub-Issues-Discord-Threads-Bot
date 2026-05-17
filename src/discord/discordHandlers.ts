@@ -1,6 +1,7 @@
 import {
   AnyThreadChannel,
   ApplicationCommandType,
+  ChatInputCommandInteraction,
   Client,
   DMChannel,
   ForumChannel,
@@ -83,10 +84,15 @@ export async function handleClientReady(client: Client) {
           type: ApplicationCommandType.ChatInput,
           dmPermission: false,
         },
+        {
+          name: "subscribe-issue",
+          description:
+            "Subscribe to status updates (close/reopen) for this issue.",
+          type: ApplicationCommandType.ChatInput,
+          dmPermission: false,
+        },
       ]);
-      logger.info(
-        `Slash command /create-issue registered in guild ${guild.name}.`,
-      );
+      logger.info(`Slash commands registered in guild ${guild.name}.`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "unknown error";
       logger.error(
@@ -203,8 +209,18 @@ function issueUrl(number: number) {
 
 export async function handleInteractionCreate(interaction: Interaction) {
   if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName !== "create-issue") return;
 
+  switch (interaction.commandName) {
+    case "create-issue":
+      return handleCreateIssueCommand(interaction);
+    case "subscribe-issue":
+      return handleSubscribeIssueCommand(interaction);
+  }
+}
+
+async function handleCreateIssueCommand(
+  interaction: ChatInputCommandInteraction,
+) {
   try {
     const hasAdminPerm =
       interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ??
@@ -297,5 +313,50 @@ export async function handleInteractionCreate(interaction: Interaction) {
     } catch {
       /* interaction may already be expired */
     }
+  }
+}
+
+async function handleSubscribeIssueCommand(
+  interaction: ChatInputCommandInteraction,
+) {
+  const channel = interaction.channel;
+  if (
+    !channel ||
+    !channel.isThread() ||
+    !channel.parentId ||
+    !config.DISCORD_CHANNEL_IDS.includes(channel.parentId)
+  ) {
+    await interaction.reply({
+      content: "This command must be used inside a forum post.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const thread = store.threads.find((t) => t.id === channel.id);
+  if (!thread || !thread.number) {
+    await interaction.reply({
+      content: "This post is not linked to a GitHub issue yet.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (!thread.subscribers) thread.subscribers = [];
+  const userId = interaction.user.id;
+  const index = thread.subscribers.indexOf(userId);
+
+  if (index === -1) {
+    thread.subscribers.push(userId);
+    await interaction.reply({
+      content: `Subscribed to issue #${thread.number}. You'll get a DM when it is closed or reopened.`,
+      ephemeral: true,
+    });
+  } else {
+    thread.subscribers.splice(index, 1);
+    await interaction.reply({
+      content: `Unsubscribed from issue #${thread.number}.`,
+      ephemeral: true,
+    });
   }
 }

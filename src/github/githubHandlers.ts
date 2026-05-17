@@ -5,6 +5,7 @@ import {
   createThread,
   deleteThread,
   lockThread,
+  notifySubscribers,
   reactToThreadStarter,
   unarchiveThread,
   unlockThread,
@@ -57,14 +58,23 @@ export async function handleClosed(req: Request) {
   const node_id = await getIssueNodeId(req);
   archiveThread(node_id);
 
-  const reaction =
-    req.body.issue?.state_reason === "not_planned" ? "❌" : "✅";
-  reactToThreadStarter(node_id, reaction);
+  const { number, title, html_url, state_reason } = req.body.issue;
+  reactToThreadStarter(node_id, state_reason === "not_planned" ? "❌" : "✅");
+  notifySubscribers(
+    node_id,
+    `🔴 Issue #${number} "${title}" has been closed.\n${html_url}`,
+  );
 }
 
 export async function handleReopened(req: Request) {
   const node_id = await getIssueNodeId(req);
   unarchiveThread(node_id);
+
+  const { number, title, html_url } = req.body.issue;
+  notifySubscribers(
+    node_id,
+    `🟢 Issue #${number} "${title}" has been reopened.\n${html_url}`,
+  );
 }
 
 export async function handleLocked(req: Request) {
