@@ -276,6 +276,7 @@ export async function handleInteractionCreate(interaction: Interaction) {
     await createIssue(thread, starter);
 
     if (thread.number) {
+      starter.react("👀").catch(() => undefined);
       const url = issueUrl(thread.number);
       await interaction.editReply({ content: `Issue created: ${url}` });
     } else {

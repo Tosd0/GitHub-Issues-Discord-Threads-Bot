@@ -176,3 +176,18 @@ export async function getThreadChannel(node_id: string | undefined): Promise<{
 
   return { thread, channel };
 }
+
+export async function reactToThreadStarter(
+  node_id: string | undefined,
+  emoji: string,
+) {
+  const { channel } = await getThreadChannel(node_id);
+  if (!channel) return;
+
+  try {
+    const starter = await channel.fetchStarterMessage();
+    await starter?.react(emoji);
+  } catch (err) {
+    /* starter message may be unavailable */
+  }
+}

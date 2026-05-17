@@ -5,6 +5,7 @@ import {
   createThread,
   deleteThread,
   lockThread,
+  reactToThreadStarter,
   unarchiveThread,
   unlockThread,
 } from "../discord/discordActions";
@@ -55,6 +56,10 @@ export async function handleCreated(req: Request) {
 export async function handleClosed(req: Request) {
   const node_id = await getIssueNodeId(req);
   archiveThread(node_id);
+
+  const reaction =
+    req.body.issue?.state_reason === "not_planned" ? "❌" : "✅";
+  reactToThreadStarter(node_id, reaction);
 }
 
 export async function handleReopened(req: Request) {
