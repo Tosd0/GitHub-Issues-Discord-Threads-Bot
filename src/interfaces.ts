@@ -21,7 +21,7 @@ interface ThreadComment {
 
 interface GitIssue {
   title: string;
-  body: string;
+  body: string | null;
   number: number;
   node_id: string;
   locked: boolean;

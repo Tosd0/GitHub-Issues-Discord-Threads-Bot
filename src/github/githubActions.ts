@@ -62,7 +62,8 @@ function getIssueBody(params: Message) {
 
 const regexForDiscordCredentials =
   /https:\/\/discord\.com\/channels\/(\d+)\/(\d+)\/(\d+)(?=\))/;
-export function getDiscordInfoFromGithubBody(body: string) {
+export function getDiscordInfoFromGithubBody(body: string | null | undefined) {
+  if (!body) return { channelId: undefined, id: undefined };
   const match = body.match(regexForDiscordCredentials);
   if (!match || match.length !== 4)
     return { channelId: undefined, id: undefined };
@@ -79,7 +80,7 @@ function formatIssuesToThreads(issues: GitIssue[]): Thread[] {
       id,
       title,
       number,
-      body,
+      body: body ?? undefined,
       node_id,
       locked,
       comments: [],
