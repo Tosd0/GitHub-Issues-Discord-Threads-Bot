@@ -1,7 +1,6 @@
 import {
   AnyThreadChannel,
   ApplicationCommandType,
-  ChannelType,
   Client,
   DMChannel,
   ForumChannel,
@@ -180,81 +179,95 @@ export async function handleInteractionCreate(interaction: Interaction) {
   if (!interaction.isChatInputCommand()) return;
   if (interaction.commandName !== "create-issue") return;
 
-  const hasAdminPerm =
-    interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ??
-    false;
-  const allowedRoleIds = config.DISCORD_ADMIN_ROLE_IDS;
-  const hasAllowedRole =
-    interaction.inCachedGuild() && allowedRoleIds.length > 0
-      ? allowedRoleIds.some((roleId) =>
-          interaction.member.roles.cache.has(roleId),
-        )
-      : false;
+  try {
+    const hasAdminPerm =
+      interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ??
+      false;
+    const allowedRoleIds = config.DISCORD_ADMIN_ROLE_IDS;
+    const hasAllowedRole =
+      interaction.inCachedGuild() && allowedRoleIds.length > 0
+        ? allowedRoleIds.some((roleId) =>
+            interaction.member.roles.cache.has(roleId),
+          )
+        : false;
 
-  if (!hasAdminPerm && !hasAllowedRole) {
-    await interaction.reply({
-      content: "You don't have permission to use this command.",
-      ephemeral: true,
-    });
-    return;
-  }
+    if (!hasAdminPerm && !hasAllowedRole) {
+      await interaction.reply({
+        content: "You don't have permission to use this command.",
+        ephemeral: true,
+      });
+      return;
+    }
 
-  const channel = interaction.channel;
-  if (
-    !channel ||
-    !channel.isThread() ||
-    channel.parentId !== config.DISCORD_CHANNEL_ID ||
-    channel.parent?.type !== ChannelType.GuildForum
-  ) {
-    await interaction.reply({
-      content: "This command must be used inside a forum post.",
-      ephemeral: true,
-    });
-    return;
-  }
+    const channel = interaction.channel;
+    if (
+      !channel ||
+      !channel.isThread() ||
+      channel.parentId !== config.DISCORD_CHANNEL_ID
+    ) {
+      await interaction.reply({
+        content: "This command must be used inside a forum post.",
+        ephemeral: true,
+      });
+      return;
+    }
 
-  let thread = store.threads.find((t) => t.id === channel.id);
-  if (!thread) {
-    thread = {
-      id: channel.id,
-      title: channel.name,
-      appliedTags: channel.appliedTags,
-      archived: false,
-      locked: false,
-      comments: [],
-    };
-    store.threads.push(thread);
-  }
+    let thread = store.threads.find((t) => t.id === channel.id);
+    if (!thread) {
+      thread = {
+        id: channel.id,
+        title: channel.name,
+        appliedTags: channel.appliedTags,
+        archived: false,
+        locked: false,
+        comments: [],
+      };
+      store.threads.push(thread);
+    }
 
-  if (thread.number) {
-    await interaction.reply({
-      content: `This post is already linked to an issue: ${issueUrl(thread.number)}`,
-      ephemeral: true,
-    });
-    return;
-  }
+    if (thread.number) {
+      await interaction.reply({
+        content: `This post is already linked to an issue: ${issueUrl(thread.number)}`,
+        ephemeral: true,
+      });
+      return;
+    }
 
-  await interaction.deferReply();
+    await interaction.deferReply();
 
-  const starter = await channel.fetchStarterMessage().catch(() => null);
-  if (!starter) {
-    await interaction.editReply({
-      content: "Could not read the starter message of this post.",
-    });
-    return;
-  }
+    const starter = await channel.fetchStarterMessage().catch(() => null);
+    if (!starter) {
+      await interaction.editReply({
+        content: "Could not read the starter message of this post.",
+      });
+      return;
+    }
 
-  thread.title = channel.name;
-  thread.appliedTags = channel.appliedTags;
+    thread.title = channel.name;
+    thread.appliedTags = channel.appliedTags;
 
-  await createIssue(thread, starter);
+    await createIssue(thread, starter);
 
-  if (thread.number) {
-    const url = issueUrl(thread.number);
-    await interaction.editReply({ content: `Issue created: ${url}` });
-  } else {
-    await interaction.editReply({
-      content: "Failed to create the issue. Please check the logs.",
-    });
+    if (thread.number) {
+      const url = issueUrl(thread.number);
+      await interaction.editReply({ content: `Issue created: ${url}` });
+    } else {
+      await interaction.editReply({
+        content: "Failed to create the issue. Please check the logs.",
+      });
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.stack || err.message : String(err);
+    logger.error(`/create-issue handler failed: ${msg}`);
+    const fallback = "Something went wrong while running /create-issue.";
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({ content: fallback });
+      } else {
+        await interaction.reply({ content: fallback, ephemeral: true });
+      }
+    } catch {
+      /* interaction may already be expired */
+    }
   }
 }
