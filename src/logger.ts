@@ -36,6 +36,7 @@ export const Actions = {
   Unlocked: "unlocked",
   Deleted: "deleted",
   DeletedComment: "deleted comment",
+  Labeled: "labeled",
 } as const;
 
 export type ActionValue = (typeof Actions)[keyof typeof Actions];

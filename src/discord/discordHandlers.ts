@@ -1,5 +1,6 @@
 import {
   AnyThreadChannel,
+  ApplicationCommandOptionType,
   ApplicationCommandType,
   ChatInputCommandInteraction,
   Client,
@@ -14,6 +15,7 @@ import {
 } from "discord.js";
 import { config } from "../config";
 import {
+  addLabelsToIssue,
   closeIssue,
   createIssue,
   createIssueComment,
@@ -91,6 +93,21 @@ export async function handleClientReady(client: Client) {
             "Subscribe to status updates (close/reopen) for this issue.",
           type: ApplicationCommandType.ChatInput,
           dmPermission: false,
+        },
+        {
+          name: "add-tag",
+          description:
+            "Add labels to this issue, creating them if missing. (Admin only)",
+          type: ApplicationCommandType.ChatInput,
+          dmPermission: false,
+          options: [
+            {
+              name: "tags",
+              description: "Space-separated tag names to add.",
+              type: ApplicationCommandOptionType.String,
+              required: true,
+            },
+          ],
         },
       ]);
       logger.info(`Slash commands registered in guild ${guild.name}.`);
@@ -216,25 +233,30 @@ export async function handleInteractionCreate(interaction: Interaction) {
       return handleCreateIssueCommand(interaction);
     case "subscribe-issue":
       return handleSubscribeIssueCommand(interaction);
+    case "add-tag":
+      return handleAddTagCommand(interaction);
   }
+}
+
+function memberIsAdmin(interaction: ChatInputCommandInteraction): boolean {
+  const hasAdminPerm =
+    interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ??
+    false;
+  const allowedRoleIds = config.DISCORD_ADMIN_ROLE_IDS;
+  const hasAllowedRole =
+    interaction.inCachedGuild() && allowedRoleIds.length > 0
+      ? allowedRoleIds.some((roleId) =>
+          interaction.member.roles.cache.has(roleId),
+        )
+      : false;
+  return hasAdminPerm || hasAllowedRole;
 }
 
 async function handleCreateIssueCommand(
   interaction: ChatInputCommandInteraction,
 ) {
   try {
-    const hasAdminPerm =
-      interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ??
-      false;
-    const allowedRoleIds = config.DISCORD_ADMIN_ROLE_IDS;
-    const hasAllowedRole =
-      interaction.inCachedGuild() && allowedRoleIds.length > 0
-        ? allowedRoleIds.some((roleId) =>
-            interaction.member.roles.cache.has(roleId),
-          )
-        : false;
-
-    if (!hasAdminPerm && !hasAllowedRole) {
+    if (!memberIsAdmin(interaction)) {
       await interaction.reply({
         content: "You don't have permission to use this command.",
         ephemeral: true,
@@ -358,6 +380,66 @@ async function handleSubscribeIssueCommand(
     await interaction.reply({
       content: `Unsubscribed from issue #${thread.number}.`,
       ephemeral: true,
+    });
+  }
+}
+
+async function handleAddTagCommand(interaction: ChatInputCommandInteraction) {
+  if (!memberIsAdmin(interaction)) {
+    await interaction.reply({
+      content: "You don't have permission to use this command.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const channel = interaction.channel;
+  if (
+    !channel ||
+    !channel.isThread() ||
+    !channel.parentId ||
+    !config.DISCORD_CHANNEL_IDS.includes(channel.parentId)
+  ) {
+    await interaction.reply({
+      content: "This command must be used inside a forum post.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const thread = store.threads.find((t) => t.id === channel.id);
+  if (!thread || !thread.number) {
+    await interaction.reply({
+      content: "This post is not linked to a GitHub issue yet.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const labels = interaction.options
+    .getString("tags", true)
+    .split(/\s+/)
+    .map((tag) => tag.trim())
+    .filter((tag) => tag.length > 0);
+
+  if (labels.length === 0) {
+    await interaction.reply({
+      content: "Please provide at least one tag.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const success = await addLabelsToIssue(thread, labels);
+  if (success) {
+    await interaction.editReply({
+      content: `Added tag(s) to issue #${thread.number}: ${labels.join(", ")}`,
+    });
+  } else {
+    await interaction.editReply({
+      content: "Failed to add tags. Please check the logs.",
     });
   }
 }

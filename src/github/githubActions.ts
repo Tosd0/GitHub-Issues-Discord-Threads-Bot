@@ -228,6 +228,34 @@ export async function createIssue(thread: Thread, params: Message) {
   }
 }
 
+export async function addLabelsToIssue(
+  thread: Thread,
+  labels: string[],
+): Promise<boolean> {
+  const { number: issue_number } = thread;
+  if (!issue_number) {
+    error("Thread does not have an issue number", thread);
+    return false;
+  }
+
+  try {
+    await octokit.rest.issues.addLabels({
+      ...repoCredentials,
+      issue_number,
+      labels,
+    });
+    info(Actions.Labeled, thread);
+    return true;
+  } catch (err) {
+    if (err instanceof Error) {
+      error(`Failed to add labels: ${err.message}`, thread);
+    } else {
+      error("Failed to add labels due to an unknown error", thread);
+    }
+    return false;
+  }
+}
+
 export async function createIssueComment(thread: Thread, params: Message) {
   const body = getIssueBody(params);
   const { number: issue_number } = thread;
