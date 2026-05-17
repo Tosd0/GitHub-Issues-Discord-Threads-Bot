@@ -1,11 +1,15 @@
 import {
   AnyThreadChannel,
+  ApplicationCommandType,
+  ChannelType,
   Client,
   DMChannel,
   ForumChannel,
+  Interaction,
   Message,
   NonThreadGuildBasedChannel,
   PartialMessage,
+  PermissionFlagsBits,
   ThreadChannel,
 } from "discord.js";
 import { config } from "../config";
@@ -56,9 +60,29 @@ export async function handleClientReady(client: Client) {
 
   logger.info(`Issues loaded : ${store.threads.length}`);
 
-  client.channels.fetch(config.DISCORD_CHANNEL_ID).then((params) => {
-    store.availableTags = (params as ForumChannel).availableTags;
-  });
+  const forumChannel = (await client.channels.fetch(
+    config.DISCORD_CHANNEL_ID,
+  )) as ForumChannel | null;
+  if (forumChannel) {
+    store.availableTags = forumChannel.availableTags;
+
+    try {
+      await forumChannel.guild.commands.set([
+        {
+          name: "create-issue",
+          description:
+            "Create a GitHub issue from this forum post (admins only).",
+          type: ApplicationCommandType.ChatInput,
+          defaultMemberPermissions: PermissionFlagsBits.Administrator,
+          dmPermission: false,
+        },
+      ]);
+      logger.info("Slash command /create-issue registered.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown error";
+      logger.error(`Failed to register slash command: ${msg}`);
+    }
+  }
 }
 
 export async function handleThreadCreate(params: AnyThreadChannel) {
@@ -124,12 +148,9 @@ export async function handleMessageCreate(params: Message) {
   const thread = store.threads.find((thread) => thread.id === channelId);
 
   if (!thread) return;
+  if (!thread.number) return;
 
-  if (!thread.body) {
-    createIssue(thread, params);
-  } else {
-    createIssueComment(thread, params);
-  }
+  createIssueComment(thread, params);
 }
 
 export async function handleMessageDelete(params: Message | PartialMessage) {
@@ -151,4 +172,80 @@ export async function handleThreadDelete(params: AnyThreadChannel) {
   if (!thread) return;
 
   deleteIssue(thread);
+}
+
+function issueUrl(number: number) {
+  return `https://github.com/${config.GITHUB_USERNAME}/${config.GITHUB_REPOSITORY}/issues/${number}`;
+}
+
+export async function handleInteractionCreate(interaction: Interaction) {
+  if (!interaction.isChatInputCommand()) return;
+  if (interaction.commandName !== "create-issue") return;
+
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({
+      content: "Only administrators can use this command.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const channel = interaction.channel;
+  if (
+    !channel ||
+    !channel.isThread() ||
+    channel.parentId !== config.DISCORD_CHANNEL_ID ||
+    channel.parent?.type !== ChannelType.GuildForum
+  ) {
+    await interaction.reply({
+      content: "This command must be used inside a forum post.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  let thread = store.threads.find((t) => t.id === channel.id);
+  if (!thread) {
+    thread = {
+      id: channel.id,
+      title: channel.name,
+      appliedTags: channel.appliedTags,
+      archived: false,
+      locked: false,
+      comments: [],
+    };
+    store.threads.push(thread);
+  }
+
+  if (thread.number) {
+    await interaction.reply({
+      content: `This post is already linked to an issue: ${issueUrl(thread.number)}`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.deferReply();
+
+  const starter = await channel.fetchStarterMessage().catch(() => null);
+  if (!starter) {
+    await interaction.editReply({
+      content: "Could not read the starter message of this post.",
+    });
+    return;
+  }
+
+  thread.title = channel.name;
+  thread.appliedTags = channel.appliedTags;
+
+  await createIssue(thread, starter);
+
+  if (thread.number) {
+    const url = issueUrl(thread.number);
+    await interaction.editReply({ content: `Issue created: ${url}` });
+  } else {
+    await interaction.editReply({
+      content: "Failed to create the issue. Please check the logs.",
+    });
+  }
 }

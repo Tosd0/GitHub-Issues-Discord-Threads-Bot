@@ -8,6 +8,7 @@ import { config } from "../config";
 import {
   handleChannelUpdate,
   handleClientReady,
+  handleInteractionCreate,
   handleMessageCreate,
   handleMessageDelete,
   handleThreadCreate,
@@ -43,6 +44,7 @@ export function initDiscord() {
   client.on(Events.MessageCreate, handleMessageCreate);
   client.on(Events.ThreadDelete, handleThreadDelete);
   client.on(Events.MessageDelete, handleMessageDelete);
+  client.on(Events.InteractionCreate, handleInteractionCreate);
 
   client.login(config.DISCORD_TOKEN);
 }
