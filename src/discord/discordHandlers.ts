@@ -59,14 +59,24 @@ export async function handleClientReady(client: Client) {
 
   logger.info(`Issues loaded : ${store.threads.length}`);
 
-  const forumChannel = (await client.channels.fetch(
-    config.DISCORD_CHANNEL_ID,
-  )) as ForumChannel | null;
-  if (forumChannel) {
-    store.availableTags = forumChannel.availableTags;
+  const guildIds = new Set<string>();
+  for (const channelId of config.DISCORD_CHANNEL_IDS) {
+    const forumChannel = (await client.channels
+      .fetch(channelId)
+      .catch(() => null)) as ForumChannel | null;
+    if (!forumChannel) {
+      logger.error(`Could not fetch forum channel ${channelId}`);
+      continue;
+    }
+    store.setChannelTags(channelId, forumChannel.availableTags);
+    guildIds.add(forumChannel.guild.id);
+  }
 
+  for (const guildId of guildIds) {
+    const guild = client.guilds.cache.get(guildId);
+    if (!guild) continue;
     try {
-      await forumChannel.guild.commands.set([
+      await guild.commands.set([
         {
           name: "create-issue",
           description: "Create a GitHub issue from this forum post.",
@@ -74,16 +84,24 @@ export async function handleClientReady(client: Client) {
           dmPermission: false,
         },
       ]);
-      logger.info("Slash command /create-issue registered.");
+      logger.info(
+        `Slash command /create-issue registered in guild ${guild.name}.`,
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : "unknown error";
-      logger.error(`Failed to register slash command: ${msg}`);
+      logger.error(
+        `Failed to register slash command in guild ${guild.name}: ${msg}`,
+      );
     }
   }
 }
 
 export async function handleThreadCreate(params: AnyThreadChannel) {
-  if (params.parentId !== config.DISCORD_CHANNEL_ID) return;
+  if (
+    !params.parentId ||
+    !config.DISCORD_CHANNEL_IDS.includes(params.parentId)
+  )
+    return;
 
   const { id, name, appliedTags } = params;
 
@@ -100,15 +118,19 @@ export async function handleThreadCreate(params: AnyThreadChannel) {
 export async function handleChannelUpdate(
   params: DMChannel | NonThreadGuildBasedChannel,
 ) {
-  if (params.id !== config.DISCORD_CHANNEL_ID) return;
+  if (!config.DISCORD_CHANNEL_IDS.includes(params.id)) return;
 
   if (params.type === 15) {
-    store.availableTags = params.availableTags;
+    store.setChannelTags(params.id, params.availableTags);
   }
 }
 
 export async function handleThreadUpdate(params: AnyThreadChannel) {
-  if (params.parentId !== config.DISCORD_CHANNEL_ID) return;
+  if (
+    !params.parentId ||
+    !config.DISCORD_CHANNEL_IDS.includes(params.parentId)
+  )
+    return;
 
   const { id, archived, locked } = params.members.thread;
   const thread = store.threads.find((item) => item.id === id);
@@ -163,7 +185,11 @@ export async function handleMessageDelete(params: Message | PartialMessage) {
 }
 
 export async function handleThreadDelete(params: AnyThreadChannel) {
-  if (params.parentId !== config.DISCORD_CHANNEL_ID) return;
+  if (
+    !params.parentId ||
+    !config.DISCORD_CHANNEL_IDS.includes(params.parentId)
+  )
+    return;
 
   const thread = store.threads.find((item) => item.id === params.id);
   if (!thread) return;
@@ -203,7 +229,8 @@ export async function handleInteractionCreate(interaction: Interaction) {
     if (
       !channel ||
       !channel.isThread() ||
-      channel.parentId !== config.DISCORD_CHANNEL_ID
+      !channel.parentId ||
+      !config.DISCORD_CHANNEL_IDS.includes(channel.parentId)
     ) {
       await interaction.reply({
         content: "This command must be used inside a forum post.",

@@ -30,7 +30,7 @@ export function createThread({
   number: number;
 }) {
   const forum = client.channels.cache.get(
-    config.DISCORD_CHANNEL_ID,
+    config.DISCORD_CHANNEL_IDS[0],
   ) as ForumChannel;
   forum.threads
     .create({

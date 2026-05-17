@@ -61,10 +61,11 @@ function getIssueBody(params: Message) {
   const sections = [
     "> Generated from Discord",
     `**From (Discord):** ${avatarImg}${displayName}`,
+    "---",
     content,
   ];
   if (attachmentsMd) sections.push(attachmentsMd);
-  sections.push(discordUrl);
+  sections.push("---", discordUrl);
 
   return sections.join("\n\n") + "\n";
 }

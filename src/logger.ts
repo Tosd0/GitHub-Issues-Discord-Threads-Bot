@@ -41,9 +41,11 @@ export const Actions = {
 export type ActionValue = (typeof Actions)[keyof typeof Actions];
 
 export const getDiscordUrl = (thread: Thread) => {
-  return `${
-    client.channels.cache.get(config.DISCORD_CHANNEL_ID)?.url
-  }/threads/${thread.id}`;
+  for (const channelId of config.DISCORD_CHANNEL_IDS) {
+    const channel = client.channels.cache.get(channelId);
+    if (channel?.url) return `${channel.url}/threads/${thread.id}`;
+  }
+  return `https://discord.com/channels/?/${thread.id}`;
 };
 
 export const getGithubUrl = (thread: Thread) => {

@@ -3,7 +3,15 @@ import { Thread } from "./interfaces";
 
 class Store {
   threads: Thread[] = [];
-  availableTags: GuildForumTag[] = [];
+  private tagsByChannel: Map<string, GuildForumTag[]> = new Map();
+
+  setChannelTags(channelId: string, tags: GuildForumTag[]) {
+    this.tagsByChannel.set(channelId, tags);
+  }
+
+  get availableTags(): GuildForumTag[] {
+    return Array.from(this.tagsByChannel.values()).flat();
+  }
 
   deleteThread(id: string | undefined) {
     const index = this.threads.findIndex((obj) => obj.id === id);
