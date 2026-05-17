@@ -228,6 +228,29 @@ export async function createIssue(thread: Thread, params: Message) {
   }
 }
 
+let cachedLabels: { names: string[]; fetchedAt: number } | null = null;
+const LABEL_CACHE_TTL = 5 * 60 * 1000;
+
+export async function listRepoLabels(): Promise<string[]> {
+  if (cachedLabels && Date.now() - cachedLabels.fetchedAt < LABEL_CACHE_TTL) {
+    return cachedLabels.names;
+  }
+
+  try {
+    const labels = await octokit.paginate(
+      octokit.rest.issues.listLabelsForRepo,
+      { ...repoCredentials, per_page: 100 },
+    );
+    const names = labels.map((label) => label.name);
+    cachedLabels = { names, fetchedAt: Date.now() };
+    return names;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown error";
+    error(`Failed to list repository labels: ${message}`);
+    return cachedLabels?.names ?? [];
+  }
+}
+
 export async function addLabelsToIssue(
   thread: Thread,
   labels: string[],
@@ -244,6 +267,7 @@ export async function addLabelsToIssue(
       issue_number,
       labels,
     });
+    cachedLabels = null;
     info(Actions.Labeled, thread);
     return true;
   } catch (err) {

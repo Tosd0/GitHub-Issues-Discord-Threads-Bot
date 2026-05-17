@@ -2,6 +2,7 @@ import {
   AnyThreadChannel,
   ApplicationCommandOptionType,
   ApplicationCommandType,
+  AutocompleteInteraction,
   ChatInputCommandInteraction,
   Client,
   DMChannel,
@@ -22,6 +23,7 @@ import {
   deleteComment,
   deleteIssue,
   getIssues,
+  listRepoLabels,
   lockIssue,
   openIssue,
   unlockIssue,
@@ -106,6 +108,7 @@ export async function handleClientReady(client: Client) {
               description: "Space-separated tag names to add.",
               type: ApplicationCommandOptionType.String,
               required: true,
+              autocomplete: true,
             },
           ],
         },
@@ -226,6 +229,13 @@ function issueUrl(number: number) {
 }
 
 export async function handleInteractionCreate(interaction: Interaction) {
+  if (interaction.isAutocomplete()) {
+    if (interaction.commandName === "add-tag") {
+      await handleAddTagAutocomplete(interaction);
+    }
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   switch (interaction.commandName) {
@@ -236,6 +246,28 @@ export async function handleInteractionCreate(interaction: Interaction) {
     case "add-tag":
       return handleAddTagCommand(interaction);
   }
+}
+
+async function handleAddTagAutocomplete(interaction: AutocompleteInteraction) {
+  const focused = interaction.options.getFocused();
+  const tokens = focused.split(/\s+/);
+  const current = tokens[tokens.length - 1].toLowerCase();
+  const prefix = tokens.slice(0, -1);
+  const alreadyChosen = new Set(prefix.map((token) => token.toLowerCase()));
+
+  const labels = await listRepoLabels();
+  const choices = labels
+    .filter(
+      (label) =>
+        label.toLowerCase().includes(current) &&
+        !alreadyChosen.has(label.toLowerCase()),
+    )
+    .map((label) => [...prefix, label].join(" "))
+    .filter((value) => value.length <= 100)
+    .slice(0, 25)
+    .map((value) => ({ name: value, value }));
+
+  await interaction.respond(choices).catch(() => undefined);
 }
 
 function memberIsAdmin(interaction: ChatInputCommandInteraction): boolean {
