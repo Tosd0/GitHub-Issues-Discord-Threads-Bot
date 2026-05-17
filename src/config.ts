@@ -8,6 +8,7 @@ const {
   GITHUB_USERNAME,
   GITHUB_REPOSITORY,
   DISCORD_CHANNEL_ID,
+  DISCORD_ADMIN_ROLE_IDS,
 } = process.env;
 
 if (
@@ -26,4 +27,8 @@ export const config = {
   GITHUB_USERNAME,
   GITHUB_REPOSITORY,
   DISCORD_CHANNEL_ID,
+  DISCORD_ADMIN_ROLE_IDS: (DISCORD_ADMIN_ROLE_IDS ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0),
 };

@@ -70,10 +70,8 @@ export async function handleClientReady(client: Client) {
       await forumChannel.guild.commands.set([
         {
           name: "create-issue",
-          description:
-            "Create a GitHub issue from this forum post (admins only).",
+          description: "Create a GitHub issue from this forum post.",
           type: ApplicationCommandType.ChatInput,
-          defaultMemberPermissions: PermissionFlagsBits.Administrator,
           dmPermission: false,
         },
       ]);
@@ -182,9 +180,20 @@ export async function handleInteractionCreate(interaction: Interaction) {
   if (!interaction.isChatInputCommand()) return;
   if (interaction.commandName !== "create-issue") return;
 
-  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+  const hasAdminPerm =
+    interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ??
+    false;
+  const allowedRoleIds = config.DISCORD_ADMIN_ROLE_IDS;
+  const hasAllowedRole =
+    interaction.inCachedGuild() && allowedRoleIds.length > 0
+      ? allowedRoleIds.some((roleId) =>
+          interaction.member.roles.cache.has(roleId),
+        )
+      : false;
+
+  if (!hasAdminPerm && !hasAllowedRole) {
     await interaction.reply({
-      content: "Only administrators can use this command.",
+      content: "You don't have permission to use this command.",
       ephemeral: true,
     });
     return;
