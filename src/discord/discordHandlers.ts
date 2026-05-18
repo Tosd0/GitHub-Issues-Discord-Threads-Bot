@@ -1,6 +1,9 @@
 import {
   AnyThreadChannel,
+  ApplicationCommandOptionType,
   ApplicationCommandType,
+  AutocompleteInteraction,
+  ChatInputCommandInteraction,
   Client,
   DMChannel,
   ForumChannel,
@@ -13,12 +16,14 @@ import {
 } from "discord.js";
 import { config } from "../config";
 import {
+  addLabelsToIssue,
   closeIssue,
   createIssue,
   createIssueComment,
   deleteComment,
   deleteIssue,
   getIssues,
+  listRepoLabels,
   lockIssue,
   openIssue,
   unlockIssue,
@@ -79,14 +84,36 @@ export async function handleClientReady(client: Client) {
       await guild.commands.set([
         {
           name: "create-issue",
-          description: "Create a GitHub issue from this forum post.",
+          description:
+            "Create a GitHub issue from this forum post. (Admin only)",
           type: ApplicationCommandType.ChatInput,
           dmPermission: false,
         },
+        {
+          name: "subscribe-issue",
+          description:
+            "Subscribe to status updates (close/reopen) for this issue.",
+          type: ApplicationCommandType.ChatInput,
+          dmPermission: false,
+        },
+        {
+          name: "add-tag",
+          description:
+            "Add labels to this issue, creating them if missing. (Admin only)",
+          type: ApplicationCommandType.ChatInput,
+          dmPermission: false,
+          options: [
+            {
+              name: "tags",
+              description: "Comma-separated tag names to add.",
+              type: ApplicationCommandOptionType.String,
+              required: true,
+              autocomplete: true,
+            },
+          ],
+        },
       ]);
-      logger.info(
-        `Slash command /create-issue registered in guild ${guild.name}.`,
-      );
+      logger.info(`Slash commands registered in guild ${guild.name}.`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "unknown error";
       logger.error(
@@ -202,22 +229,72 @@ function issueUrl(number: number) {
 }
 
 export async function handleInteractionCreate(interaction: Interaction) {
+  if (interaction.isAutocomplete()) {
+    if (interaction.commandName === "add-tag") {
+      await handleAddTagAutocomplete(interaction);
+    }
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName !== "create-issue") return;
 
+  switch (interaction.commandName) {
+    case "create-issue":
+      return handleCreateIssueCommand(interaction);
+    case "subscribe-issue":
+      return handleSubscribeIssueCommand(interaction);
+    case "add-tag":
+      return handleAddTagCommand(interaction);
+  }
+}
+
+async function handleAddTagAutocomplete(interaction: AutocompleteInteraction) {
+  const focused = interaction.options.getFocused();
+  const tokens = focused.split(",");
+  const current = (tokens[tokens.length - 1] ?? "").trim().toLowerCase();
+  const prefix = tokens.slice(0, -1).map((token) => token.trim());
+  const alreadyChosen = new Set(
+    prefix
+      .filter((token) => token.length > 0)
+      .map((token) => token.toLowerCase()),
+  );
+
+  const labels = await listRepoLabels();
+  const choices = labels
+    .filter(
+      (label) =>
+        label.toLowerCase().includes(current) &&
+        !alreadyChosen.has(label.toLowerCase()),
+    )
+    .map((label) =>
+      prefix.length > 0 ? `${prefix.join(", ")}, ${label}` : label,
+    )
+    .filter((value) => value.length <= 100)
+    .slice(0, 25)
+    .map((value) => ({ name: value, value }));
+
+  await interaction.respond(choices).catch(() => undefined);
+}
+
+function memberIsAdmin(interaction: ChatInputCommandInteraction): boolean {
+  const hasAdminPerm =
+    interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ??
+    false;
+  const allowedRoleIds = config.DISCORD_ADMIN_ROLE_IDS;
+  const hasAllowedRole =
+    interaction.inCachedGuild() && allowedRoleIds.length > 0
+      ? allowedRoleIds.some((roleId) =>
+          interaction.member.roles.cache.has(roleId),
+        )
+      : false;
+  return hasAdminPerm || hasAllowedRole;
+}
+
+async function handleCreateIssueCommand(
+  interaction: ChatInputCommandInteraction,
+) {
   try {
-    const hasAdminPerm =
-      interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ??
-      false;
-    const allowedRoleIds = config.DISCORD_ADMIN_ROLE_IDS;
-    const hasAllowedRole =
-      interaction.inCachedGuild() && allowedRoleIds.length > 0
-        ? allowedRoleIds.some((roleId) =>
-            interaction.member.roles.cache.has(roleId),
-          )
-        : false;
-
-    if (!hasAdminPerm && !hasAllowedRole) {
+    if (!memberIsAdmin(interaction)) {
       await interaction.reply({
         content: "You don't have permission to use this command.",
         ephemeral: true,
@@ -276,6 +353,7 @@ export async function handleInteractionCreate(interaction: Interaction) {
     await createIssue(thread, starter);
 
     if (thread.number) {
+      starter.react("👀").catch(() => undefined);
       const url = issueUrl(thread.number);
       await interaction.editReply({ content: `Issue created: ${url}` });
     } else {
@@ -296,5 +374,110 @@ export async function handleInteractionCreate(interaction: Interaction) {
     } catch {
       /* interaction may already be expired */
     }
+  }
+}
+
+async function handleSubscribeIssueCommand(
+  interaction: ChatInputCommandInteraction,
+) {
+  const channel = interaction.channel;
+  if (
+    !channel ||
+    !channel.isThread() ||
+    !channel.parentId ||
+    !config.DISCORD_CHANNEL_IDS.includes(channel.parentId)
+  ) {
+    await interaction.reply({
+      content: "This command must be used inside a forum post.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const thread = store.threads.find((t) => t.id === channel.id);
+  if (!thread || !thread.number) {
+    await interaction.reply({
+      content: "This post is not linked to a GitHub issue yet.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (!thread.subscribers) thread.subscribers = [];
+  const userId = interaction.user.id;
+  const index = thread.subscribers.indexOf(userId);
+
+  if (index === -1) {
+    thread.subscribers.push(userId);
+    await interaction.reply({
+      content: `Subscribed to issue #${thread.number}. You'll get a DM when it is closed or reopened.`,
+      ephemeral: true,
+    });
+  } else {
+    thread.subscribers.splice(index, 1);
+    await interaction.reply({
+      content: `Unsubscribed from issue #${thread.number}.`,
+      ephemeral: true,
+    });
+  }
+}
+
+async function handleAddTagCommand(interaction: ChatInputCommandInteraction) {
+  if (!memberIsAdmin(interaction)) {
+    await interaction.reply({
+      content: "You don't have permission to use this command.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const channel = interaction.channel;
+  if (
+    !channel ||
+    !channel.isThread() ||
+    !channel.parentId ||
+    !config.DISCORD_CHANNEL_IDS.includes(channel.parentId)
+  ) {
+    await interaction.reply({
+      content: "This command must be used inside a forum post.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const thread = store.threads.find((t) => t.id === channel.id);
+  if (!thread || !thread.number) {
+    await interaction.reply({
+      content: "This post is not linked to a GitHub issue yet.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const labels = interaction.options
+    .getString("tags", true)
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter((tag) => tag.length > 0);
+
+  if (labels.length === 0) {
+    await interaction.reply({
+      content: "Please provide at least one tag.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const success = await addLabelsToIssue(thread, labels);
+  if (success) {
+    await interaction.editReply({
+      content: `Added tag(s) to issue #${thread.number}: ${labels.join(", ")}`,
+    });
+  } else {
+    await interaction.editReply({
+      content: "Failed to add tags. Please check the logs.",
+    });
   }
 }
