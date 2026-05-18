@@ -186,14 +186,16 @@ export async function notifySubscribers(
   const thread = store.threads.find((t) => t.node_id === node_id);
   if (!thread?.subscribers?.length) return;
 
-  for (const userId of thread.subscribers) {
-    try {
-      const user = await client.users.fetch(userId);
-      await user.send(message);
-    } catch (err) {
-      /* user may have DMs disabled or left the server */
-    }
-  }
+  await Promise.all(
+    thread.subscribers.map(async (userId) => {
+      try {
+        const user = await client.users.fetch(userId);
+        await user.send(message);
+      } catch (err) {
+        /* user may have DMs disabled or left the server */
+      }
+    }),
+  );
 }
 
 export async function reactToThreadStarter(

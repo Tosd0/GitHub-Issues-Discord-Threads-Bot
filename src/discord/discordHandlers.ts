@@ -105,7 +105,7 @@ export async function handleClientReady(client: Client) {
           options: [
             {
               name: "tags",
-              description: "Space-separated tag names to add.",
+              description: "Comma-separated tag names to add.",
               type: ApplicationCommandOptionType.String,
               required: true,
               autocomplete: true,
@@ -250,10 +250,14 @@ export async function handleInteractionCreate(interaction: Interaction) {
 
 async function handleAddTagAutocomplete(interaction: AutocompleteInteraction) {
   const focused = interaction.options.getFocused();
-  const tokens = focused.split(/\s+/);
-  const current = tokens[tokens.length - 1].toLowerCase();
-  const prefix = tokens.slice(0, -1);
-  const alreadyChosen = new Set(prefix.map((token) => token.toLowerCase()));
+  const tokens = focused.split(",");
+  const current = (tokens[tokens.length - 1] ?? "").trim().toLowerCase();
+  const prefix = tokens.slice(0, -1).map((token) => token.trim());
+  const alreadyChosen = new Set(
+    prefix
+      .filter((token) => token.length > 0)
+      .map((token) => token.toLowerCase()),
+  );
 
   const labels = await listRepoLabels();
   const choices = labels
@@ -262,7 +266,9 @@ async function handleAddTagAutocomplete(interaction: AutocompleteInteraction) {
         label.toLowerCase().includes(current) &&
         !alreadyChosen.has(label.toLowerCase()),
     )
-    .map((label) => [...prefix, label].join(" "))
+    .map((label) =>
+      prefix.length > 0 ? `${prefix.join(", ")}, ${label}` : label,
+    )
     .filter((value) => value.length <= 100)
     .slice(0, 25)
     .map((value) => ({ name: value, value }));
@@ -450,7 +456,7 @@ async function handleAddTagCommand(interaction: ChatInputCommandInteraction) {
 
   const labels = interaction.options
     .getString("tags", true)
-    .split(/\s+/)
+    .split(",")
     .map((tag) => tag.trim())
     .filter((tag) => tag.length > 0);
 
