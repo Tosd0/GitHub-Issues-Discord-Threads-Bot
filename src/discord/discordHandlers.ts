@@ -355,7 +355,9 @@ async function handleCreateIssueCommand(
     if (thread.number) {
       starter.react("👀").catch(() => undefined);
       const url = issueUrl(thread.number);
-      await interaction.editReply({ content: `Issue created: ${url}` });
+      await interaction.editReply({
+        content: `Issue created by <@${interaction.user.id}>: ${url}`,
+      });
     } else {
       await interaction.editReply({
         content: "Failed to create the issue. Please check the logs.",
@@ -468,12 +470,12 @@ async function handleAddTagCommand(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply();
 
   const success = await addLabelsToIssue(thread, labels);
   if (success) {
     await interaction.editReply({
-      content: `Added tag(s) to issue #${thread.number}: ${labels.join(", ")}`,
+      content: `Tag(s) added to issue [#${thread.number}](<${issueUrl(thread.number)}>) by <@${interaction.user.id}>: ${labels.join(", ")}`,
     });
   } else {
     await interaction.editReply({
