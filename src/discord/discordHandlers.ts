@@ -309,7 +309,11 @@ async function handleAddTagAutocomplete(interaction: AutocompleteInteraction) {
   await interaction.respond(choices).catch(() => undefined);
 }
 
-function memberIsAdmin(interaction: ChatInputCommandInteraction): boolean {
+function memberIsAdmin(
+  interaction:
+    | ChatInputCommandInteraction
+    | MessageContextMenuCommandInteraction,
+): boolean {
   const hasAdminPerm =
     interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ??
     false;
@@ -616,6 +620,14 @@ async function handleLinkIssueCommand(
 async function handleSyncToIssueCommand(
   interaction: MessageContextMenuCommandInteraction,
 ) {
+  if (!memberIsAdmin(interaction)) {
+    await interaction.reply({
+      content: "You don't have permission to use this command.",
+      ephemeral: true,
+    });
+    return;
+  }
+
   const channel = interaction.channel;
   if (
     !channel ||
