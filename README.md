@@ -11,6 +11,11 @@ This Discord bot serves as a seamless bridge between Discord thread channel and 
     command that links an existing GitHub issue to the current forum post.
     Appends the Discord URL to the issue body if it isn't there yet, so the
     link persists across bot restarts.
+-   \[x] Unlink issue (`/unlink-issue`) -> Admin-only slash command that
+    detaches the current post from its GitHub issue without touching either
+    side. Strips the Discord URL marker from the issue body so the link no
+    longer survives bot restarts, and lets you re-link a different post (or
+    safely delete the current one without deleting the issue).
 -   \[ ] GitHub Issue Creation -> Not auto-mirrored. Use `/link-issue number:<n>`
     from an existing Discord post to attach a GitHub issue manually.
 
