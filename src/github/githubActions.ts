@@ -300,6 +300,25 @@ export async function linkIssue(
   thread.locked = issueData.locked;
   thread.archived = issueData.state === "closed";
 
+  try {
+    const comments = await octokit.paginate(
+      octokit.rest.issues.listComments,
+      { ...repoCredentials, issue_number, per_page: 100 },
+    );
+    for (const comment of comments) {
+      const { channelId, id } = getDiscordInfoFromGithubBody(comment.body);
+      if (!id || channelId !== thread.id) continue;
+      if (thread.comments.some((c) => c.id === id)) continue;
+      thread.comments.push({ id, git_id: comment.id });
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown error";
+    error(
+      `Linked, but failed to load existing comments for #${issue_number}: ${message}`,
+      thread,
+    );
+  }
+
   info(Actions.Linked, thread);
   return { ok: true };
 }

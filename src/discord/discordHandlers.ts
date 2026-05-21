@@ -327,6 +327,27 @@ function memberIsAdmin(
   return hasAdminPerm || hasAllowedRole;
 }
 
+async function ensureForumThread(
+  interaction:
+    | ChatInputCommandInteraction
+    | MessageContextMenuCommandInteraction,
+): Promise<ThreadChannel | null> {
+  const channel = interaction.channel;
+  if (
+    !channel ||
+    !channel.isThread() ||
+    !channel.parentId ||
+    !config.DISCORD_CHANNEL_IDS.includes(channel.parentId)
+  ) {
+    await interaction.reply({
+      content: "This command must be used inside a forum post.",
+      ephemeral: true,
+    });
+    return null;
+  }
+  return channel as ThreadChannel;
+}
+
 async function handleCreateIssueCommand(
   interaction: ChatInputCommandInteraction,
 ) {
@@ -339,19 +360,8 @@ async function handleCreateIssueCommand(
       return;
     }
 
-    const channel = interaction.channel;
-    if (
-      !channel ||
-      !channel.isThread() ||
-      !channel.parentId ||
-      !config.DISCORD_CHANNEL_IDS.includes(channel.parentId)
-    ) {
-      await interaction.reply({
-        content: "This command must be used inside a forum post.",
-        ephemeral: true,
-      });
-      return;
-    }
+    const channel = await ensureForumThread(interaction);
+    if (!channel) return;
 
     let thread = store.threads.find((t) => t.id === channel.id);
     if (!thread) {
@@ -419,19 +429,8 @@ async function handleCreateIssueCommand(
 async function handleSubscribeIssueCommand(
   interaction: ChatInputCommandInteraction,
 ) {
-  const channel = interaction.channel;
-  if (
-    !channel ||
-    !channel.isThread() ||
-    !channel.parentId ||
-    !config.DISCORD_CHANNEL_IDS.includes(channel.parentId)
-  ) {
-    await interaction.reply({
-      content: "This command must be used inside a forum post.",
-      ephemeral: true,
-    });
-    return;
-  }
+  const channel = await ensureForumThread(interaction);
+  if (!channel) return;
 
   const thread = store.threads.find((t) => t.id === channel.id);
   if (!thread || !thread.number) {
@@ -470,19 +469,8 @@ async function handleAddTagCommand(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const channel = interaction.channel;
-  if (
-    !channel ||
-    !channel.isThread() ||
-    !channel.parentId ||
-    !config.DISCORD_CHANNEL_IDS.includes(channel.parentId)
-  ) {
-    await interaction.reply({
-      content: "This command must be used inside a forum post.",
-      ephemeral: true,
-    });
-    return;
-  }
+  const channel = await ensureForumThread(interaction);
+  if (!channel) return;
 
   const thread = store.threads.find((t) => t.id === channel.id);
   if (!thread || !thread.number) {
@@ -533,19 +521,8 @@ async function handleLinkIssueCommand(
       return;
     }
 
-    const channel = interaction.channel;
-    if (
-      !channel ||
-      !channel.isThread() ||
-      !channel.parentId ||
-      !config.DISCORD_CHANNEL_IDS.includes(channel.parentId)
-    ) {
-      await interaction.reply({
-        content: "This command must be used inside a forum post.",
-        ephemeral: true,
-      });
-      return;
-    }
+    const channel = await ensureForumThread(interaction);
+    if (!channel) return;
 
     const issueNumber = interaction.options.getInteger("number", true);
 
@@ -628,19 +605,8 @@ async function handleSyncToIssueCommand(
     return;
   }
 
-  const channel = interaction.channel;
-  if (
-    !channel ||
-    !channel.isThread() ||
-    !channel.parentId ||
-    !config.DISCORD_CHANNEL_IDS.includes(channel.parentId)
-  ) {
-    await interaction.reply({
-      content: "This command must be used inside a forum post.",
-      ephemeral: true,
-    });
-    return;
-  }
+  const channel = await ensureForumThread(interaction);
+  if (!channel) return;
 
   const thread = store.threads.find((t) => t.id === channel.id);
   if (!thread || !thread.number) {
