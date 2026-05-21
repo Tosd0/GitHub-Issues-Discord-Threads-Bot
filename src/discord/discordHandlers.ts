@@ -9,6 +9,7 @@ import {
   ForumChannel,
   Interaction,
   Message,
+  MessageContextMenuCommandInteraction,
   NonThreadGuildBasedChannel,
   PartialMessage,
   PermissionFlagsBits,
@@ -23,6 +24,7 @@ import {
   deleteComment,
   deleteIssue,
   getIssues,
+  linkIssue,
   listRepoLabels,
   lockIssue,
   openIssue,
@@ -112,6 +114,27 @@ export async function handleClientReady(client: Client) {
             },
           ],
         },
+        {
+          name: "Sync to Issue",
+          type: ApplicationCommandType.Message,
+          dmPermission: false,
+        },
+        {
+          name: "link-issue",
+          description:
+            "Link an existing GitHub issue to this forum post. (Admin only)",
+          type: ApplicationCommandType.ChatInput,
+          dmPermission: false,
+          options: [
+            {
+              name: "number",
+              description: "GitHub issue number to link.",
+              type: ApplicationCommandOptionType.Integer,
+              required: true,
+              minValue: 1,
+            },
+          ],
+        },
       ]);
       logger.info(`Slash commands registered in guild ${guild.name}.`);
     } catch (err) {
@@ -190,6 +213,7 @@ export async function handleMessageCreate(params: Message) {
   const { channelId, author } = params;
 
   if (author.bot) return;
+  if (!config.AUTO_SYNC_COMMENTS) return;
 
   const thread = store.threads.find((thread) => thread.id === channelId);
 
@@ -236,6 +260,13 @@ export async function handleInteractionCreate(interaction: Interaction) {
     return;
   }
 
+  if (interaction.isMessageContextMenuCommand()) {
+    if (interaction.commandName === "Sync to Issue") {
+      return handleSyncToIssueCommand(interaction);
+    }
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   switch (interaction.commandName) {
@@ -245,6 +276,8 @@ export async function handleInteractionCreate(interaction: Interaction) {
       return handleSubscribeIssueCommand(interaction);
     case "add-tag":
       return handleAddTagCommand(interaction);
+    case "link-issue":
+      return handleLinkIssueCommand(interaction);
   }
 }
 
@@ -276,7 +309,11 @@ async function handleAddTagAutocomplete(interaction: AutocompleteInteraction) {
   await interaction.respond(choices).catch(() => undefined);
 }
 
-function memberIsAdmin(interaction: ChatInputCommandInteraction): boolean {
+function memberIsAdmin(
+  interaction:
+    | ChatInputCommandInteraction
+    | MessageContextMenuCommandInteraction,
+): boolean {
   const hasAdminPerm =
     interaction.memberPermissions?.has(PermissionFlagsBits.Administrator) ??
     false;
@@ -288,6 +325,27 @@ function memberIsAdmin(interaction: ChatInputCommandInteraction): boolean {
         )
       : false;
   return hasAdminPerm || hasAllowedRole;
+}
+
+async function ensureForumThread(
+  interaction:
+    | ChatInputCommandInteraction
+    | MessageContextMenuCommandInteraction,
+): Promise<ThreadChannel | null> {
+  const channel = interaction.channel;
+  if (
+    !channel ||
+    !channel.isThread() ||
+    !channel.parentId ||
+    !config.DISCORD_CHANNEL_IDS.includes(channel.parentId)
+  ) {
+    await interaction.reply({
+      content: "This command must be used inside a forum post.",
+      ephemeral: true,
+    });
+    return null;
+  }
+  return channel as ThreadChannel;
 }
 
 async function handleCreateIssueCommand(
@@ -302,19 +360,8 @@ async function handleCreateIssueCommand(
       return;
     }
 
-    const channel = interaction.channel;
-    if (
-      !channel ||
-      !channel.isThread() ||
-      !channel.parentId ||
-      !config.DISCORD_CHANNEL_IDS.includes(channel.parentId)
-    ) {
-      await interaction.reply({
-        content: "This command must be used inside a forum post.",
-        ephemeral: true,
-      });
-      return;
-    }
+    const channel = await ensureForumThread(interaction);
+    if (!channel) return;
 
     let thread = store.threads.find((t) => t.id === channel.id);
     if (!thread) {
@@ -382,19 +429,8 @@ async function handleCreateIssueCommand(
 async function handleSubscribeIssueCommand(
   interaction: ChatInputCommandInteraction,
 ) {
-  const channel = interaction.channel;
-  if (
-    !channel ||
-    !channel.isThread() ||
-    !channel.parentId ||
-    !config.DISCORD_CHANNEL_IDS.includes(channel.parentId)
-  ) {
-    await interaction.reply({
-      content: "This command must be used inside a forum post.",
-      ephemeral: true,
-    });
-    return;
-  }
+  const channel = await ensureForumThread(interaction);
+  if (!channel) return;
 
   const thread = store.threads.find((t) => t.id === channel.id);
   if (!thread || !thread.number) {
@@ -433,19 +469,8 @@ async function handleAddTagCommand(interaction: ChatInputCommandInteraction) {
     return;
   }
 
-  const channel = interaction.channel;
-  if (
-    !channel ||
-    !channel.isThread() ||
-    !channel.parentId ||
-    !config.DISCORD_CHANNEL_IDS.includes(channel.parentId)
-  ) {
-    await interaction.reply({
-      content: "This command must be used inside a forum post.",
-      ephemeral: true,
-    });
-    return;
-  }
+  const channel = await ensureForumThread(interaction);
+  if (!channel) return;
 
   const thread = store.threads.find((t) => t.id === channel.id);
   if (!thread || !thread.number) {
@@ -480,6 +505,156 @@ async function handleAddTagCommand(interaction: ChatInputCommandInteraction) {
   } else {
     await interaction.editReply({
       content: "Failed to add tags. Please check the logs.",
+    });
+  }
+}
+
+async function handleLinkIssueCommand(
+  interaction: ChatInputCommandInteraction,
+) {
+  try {
+    if (!memberIsAdmin(interaction)) {
+      await interaction.reply({
+        content: "You don't have permission to use this command.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const channel = await ensureForumThread(interaction);
+    if (!channel) return;
+
+    const issueNumber = interaction.options.getInteger("number", true);
+
+    let thread = store.threads.find((t) => t.id === channel.id);
+    if (thread?.number) {
+      await interaction.reply({
+        content: `This post is already linked to an issue: ${issueUrl(thread.number)}`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const conflict = store.threads.find(
+      (t) => t.number === issueNumber && t.id !== channel.id,
+    );
+    if (conflict) {
+      await interaction.reply({
+        content: `Issue #${issueNumber} is already linked to another Discord post.`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    if (!thread) {
+      thread = {
+        id: channel.id,
+        title: channel.name,
+        appliedTags: channel.appliedTags,
+        archived: false,
+        locked: false,
+        comments: [],
+      };
+      store.threads.push(thread);
+    }
+
+    await interaction.deferReply();
+
+    const starter = await channel.fetchStarterMessage().catch(() => null);
+    if (!starter) {
+      await interaction.editReply({
+        content: "Could not read the starter message of this post.",
+      });
+      return;
+    }
+
+    const result = await linkIssue(thread, issueNumber, starter);
+    if (!result.ok) {
+      await interaction.editReply({ content: result.reason });
+      return;
+    }
+
+    starter.react("👀").catch(() => undefined);
+    await interaction.editReply({
+      content: `Linked to issue [#${thread.number}](<${issueUrl(thread.number!)}>) by <@${interaction.user.id}>.`,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.stack || err.message : String(err);
+    logger.error(`/link-issue handler failed: ${msg}`);
+    const fallback = "Something went wrong while running /link-issue.";
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({ content: fallback });
+      } else {
+        await interaction.reply({ content: fallback, ephemeral: true });
+      }
+    } catch {
+      /* interaction may already be expired */
+    }
+  }
+}
+
+async function handleSyncToIssueCommand(
+  interaction: MessageContextMenuCommandInteraction,
+) {
+  if (!memberIsAdmin(interaction)) {
+    await interaction.reply({
+      content: "You don't have permission to use this command.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const channel = await ensureForumThread(interaction);
+  if (!channel) return;
+
+  const thread = store.threads.find((t) => t.id === channel.id);
+  if (!thread || !thread.number) {
+    await interaction.reply({
+      content: "This post is not linked to a GitHub issue yet.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const target = interaction.targetMessage;
+
+  if (target.author.bot) {
+    await interaction.reply({
+      content: "Cannot sync bot messages.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (thread.comments.some((c) => c.id === target.id)) {
+    await interaction.reply({
+      content: `This message is already synced to issue [#${thread.number}](<${issueUrl(thread.number)}>).`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (!target.content && target.attachments.size === 0) {
+    await interaction.reply({
+      content: "Cannot sync an empty message.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const before = thread.comments.length;
+  await createIssueComment(thread, target);
+
+  if (thread.comments.length > before) {
+    await interaction.editReply({
+      content: `Message synced to issue [#${thread.number}](<${issueUrl(thread.number)}>).`,
+    });
+  } else {
+    await interaction.editReply({
+      content: "Failed to sync the message. Please check the logs.",
     });
   }
 }

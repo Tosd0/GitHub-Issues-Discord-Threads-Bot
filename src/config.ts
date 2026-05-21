@@ -9,7 +9,13 @@ const {
   GITHUB_REPOSITORY,
   DISCORD_CHANNEL_ID,
   DISCORD_ADMIN_ROLE_IDS,
+  AUTO_SYNC_COMMENTS,
 } = process.env;
+
+const autoSyncComments = (AUTO_SYNC_COMMENTS ?? "true").trim().toLowerCase();
+const AUTO_SYNC_COMMENTS_ENABLED = !["false", "0", "no", "off"].includes(
+  autoSyncComments,
+);
 
 const channelIds = (DISCORD_CHANNEL_ID ?? "")
   .split(",")
@@ -36,4 +42,5 @@ export const config = {
     .split(",")
     .map((id) => id.trim())
     .filter((id) => id.length > 0),
+  AUTO_SYNC_COMMENTS: AUTO_SYNC_COMMENTS_ENABLED,
 };

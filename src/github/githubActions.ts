@@ -228,6 +228,101 @@ export async function createIssue(thread: Thread, params: Message) {
   }
 }
 
+export type LinkIssueResult =
+  | { ok: true }
+  | { ok: false; reason: string; code?: "not_found" | "already_linked" };
+
+export async function linkIssue(
+  thread: Thread,
+  issue_number: number,
+  starter: Message,
+): Promise<LinkIssueResult> {
+  let issueData;
+  try {
+    const { data } = await octokit.rest.issues.get({
+      ...repoCredentials,
+      issue_number,
+    });
+    issueData = data;
+  } catch (err) {
+    const status = (err as { status?: number })?.status;
+    if (status === 404) {
+      return {
+        ok: false,
+        code: "not_found",
+        reason: `Issue #${issue_number} was not found.`,
+      };
+    }
+    const message = err instanceof Error ? err.message : "unknown error";
+    error(`Failed to fetch issue #${issue_number}: ${message}`, thread);
+    return { ok: false, reason: message };
+  }
+
+  const existingDiscord = getDiscordInfoFromGithubBody(issueData.body);
+  if (
+    existingDiscord.channelId &&
+    existingDiscord.channelId !== thread.id
+  ) {
+    return {
+      ok: false,
+      code: "already_linked",
+      reason: `Issue #${issue_number} is already linked to another Discord post.`,
+    };
+  }
+
+  let body = issueData.body ?? "";
+  if (!existingDiscord.id) {
+    const discordUrl = `https://discord.com/channels/${starter.guildId}/${starter.channelId}/${starter.id}`;
+    body =
+      body.length > 0
+        ? `${body}\n\n---\n\n${discordUrl}\n`
+        : `${discordUrl}\n`;
+
+    try {
+      await octokit.rest.issues.update({
+        ...repoCredentials,
+        issue_number,
+        body,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "unknown error";
+      error(
+        `Failed to update issue #${issue_number} body: ${message}`,
+        thread,
+      );
+      return { ok: false, reason: message };
+    }
+  }
+
+  thread.number = issueData.number;
+  thread.node_id = issueData.node_id;
+  thread.body = body;
+  thread.locked = issueData.locked;
+  thread.archived = issueData.state === "closed";
+
+  try {
+    const comments = await octokit.paginate(
+      octokit.rest.issues.listComments,
+      { ...repoCredentials, issue_number, per_page: 100 },
+    );
+    for (const comment of comments) {
+      const { channelId, id } = getDiscordInfoFromGithubBody(comment.body);
+      if (!id || channelId !== thread.id) continue;
+      if (thread.comments.some((c) => c.id === id)) continue;
+      thread.comments.push({ id, git_id: comment.id });
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown error";
+    error(
+      `Linked, but failed to load existing comments for #${issue_number}: ${message}`,
+      thread,
+    );
+  }
+
+  info(Actions.Linked, thread);
+  return { ok: true };
+}
+
 let cachedLabels: { names: string[]; fetchedAt: number } | null = null;
 const LABEL_CACHE_TTL = 5 * 60 * 1000;
 
