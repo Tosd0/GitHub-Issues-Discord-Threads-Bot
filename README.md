@@ -65,6 +65,7 @@ https://discord.com/channels/<GUILD_ID>/<DISCORD_CHANNEL_ID>
     4. Generate and copy the personal access token.
 -   GITHUB_USERNAME - example: https://github.com/<GITHUB_USERNAME>/<GITHUB_REPOSITORY>
 -   GITHUB_REPOSITORY
+-   GITHUB_WEBHOOK_SECRET (optional, recommended) - A shared secret used to verify incoming GitHub webhook requests via the `X-Hub-Signature-256` header. Generate one with `openssl rand -hex 32` and set the same value in your GitHub webhook's "Secret" field. If not set, requests are accepted without verification (a warning is logged at startup).
 
 > **_NOTE:_** For detailed information about personal access tokens, visit the [Managing your personal access tokens - GitHub Docs](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
 
