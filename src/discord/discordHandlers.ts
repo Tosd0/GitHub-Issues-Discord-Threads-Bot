@@ -9,6 +9,7 @@ import {
   ForumChannel,
   Interaction,
   Message,
+  MessageContextMenuCommandInteraction,
   NonThreadGuildBasedChannel,
   PartialMessage,
   PermissionFlagsBits,
@@ -112,6 +113,11 @@ export async function handleClientReady(client: Client) {
             },
           ],
         },
+        {
+          name: "Sync to Issue",
+          type: ApplicationCommandType.Message,
+          dmPermission: false,
+        },
       ]);
       logger.info(`Slash commands registered in guild ${guild.name}.`);
     } catch (err) {
@@ -190,6 +196,7 @@ export async function handleMessageCreate(params: Message) {
   const { channelId, author } = params;
 
   if (author.bot) return;
+  if (!config.AUTO_SYNC_COMMENTS) return;
 
   const thread = store.threads.find((thread) => thread.id === channelId);
 
@@ -232,6 +239,13 @@ export async function handleInteractionCreate(interaction: Interaction) {
   if (interaction.isAutocomplete()) {
     if (interaction.commandName === "add-tag") {
       await handleAddTagAutocomplete(interaction);
+    }
+    return;
+  }
+
+  if (interaction.isMessageContextMenuCommand()) {
+    if (interaction.commandName === "Sync to Issue") {
+      return handleSyncToIssueCommand(interaction);
     }
     return;
   }
@@ -480,6 +494,74 @@ async function handleAddTagCommand(interaction: ChatInputCommandInteraction) {
   } else {
     await interaction.editReply({
       content: "Failed to add tags. Please check the logs.",
+    });
+  }
+}
+
+async function handleSyncToIssueCommand(
+  interaction: MessageContextMenuCommandInteraction,
+) {
+  const channel = interaction.channel;
+  if (
+    !channel ||
+    !channel.isThread() ||
+    !channel.parentId ||
+    !config.DISCORD_CHANNEL_IDS.includes(channel.parentId)
+  ) {
+    await interaction.reply({
+      content: "This command must be used inside a forum post.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const thread = store.threads.find((t) => t.id === channel.id);
+  if (!thread || !thread.number) {
+    await interaction.reply({
+      content: "This post is not linked to a GitHub issue yet.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const target = interaction.targetMessage;
+
+  if (target.author.id === interaction.client.user?.id) {
+    await interaction.reply({
+      content: "Cannot sync the bot's own messages.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (thread.comments.some((c) => c.id === target.id)) {
+    await interaction.reply({
+      content: `This message is already synced to issue [#${thread.number}](<${issueUrl(thread.number)}>).`,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (!target.content && target.attachments.size === 0) {
+    await interaction.reply({
+      content: "Cannot sync an empty message.",
+      ephemeral: true,
+    });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const before = thread.comments.length;
+  await createIssueComment(thread, target);
+
+  if (thread.comments.length > before) {
+    await interaction.editReply({
+      content: `Message synced to issue [#${thread.number}](<${issueUrl(thread.number)}>).`,
+    });
+  } else {
+    await interaction.editReply({
+      content: "Failed to sync the message. Please check the logs.",
     });
   }
 }

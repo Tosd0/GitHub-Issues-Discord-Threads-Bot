@@ -12,6 +12,10 @@ This Discord bot serves as a seamless bridge between Discord thread channel and 
 #### Comments
 
 -   \[x] Discord Post Comments -> Mirrored as comments on associated GitHub issues.
+-   \[x] Auto-sync toggle (`AUTO_SYNC_COMMENTS`) -> When `false`, new Discord
+    messages are not automatically pushed to GitHub; users can manually sync
+    individual messages via the **Sync to Issue** message context menu
+    command (right-click a message -> Apps -> Sync to Issue).
 -   \[ ] GitHub Issue Comments -> Pending feature: Synchronization with Discord post comments.
 
 #### Tags & Labels
@@ -65,6 +69,10 @@ https://discord.com/channels/<GUILD_ID>/<DISCORD_CHANNEL_ID>
     4. Generate and copy the personal access token.
 -   GITHUB_USERNAME - example: https://github.com/<GITHUB_USERNAME>/<GITHUB_REPOSITORY>
 -   GITHUB_REPOSITORY
+-   AUTO_SYNC_COMMENTS - Optional, default `true`. Set to `false` to disable
+    automatic syncing of Discord messages to GitHub issue comments. When
+    disabled, use the **Sync to Issue** message context menu command to push
+    individual messages.
 
 > **_NOTE:_** For detailed information about personal access tokens, visit the [Managing your personal access tokens - GitHub Docs](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
 
