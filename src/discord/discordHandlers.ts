@@ -24,6 +24,7 @@ import {
   deleteComment,
   deleteIssue,
   getIssues,
+  linkIssue,
   listRepoLabels,
   lockIssue,
   openIssue,
@@ -117,6 +118,22 @@ export async function handleClientReady(client: Client) {
           name: "Sync to Issue",
           type: ApplicationCommandType.Message,
           dmPermission: false,
+        },
+        {
+          name: "link-issue",
+          description:
+            "Link an existing GitHub issue to this forum post. (Admin only)",
+          type: ApplicationCommandType.ChatInput,
+          dmPermission: false,
+          options: [
+            {
+              name: "number",
+              description: "GitHub issue number to link.",
+              type: ApplicationCommandOptionType.Integer,
+              required: true,
+              minValue: 1,
+            },
+          ],
         },
       ]);
       logger.info(`Slash commands registered in guild ${guild.name}.`);
@@ -259,6 +276,8 @@ export async function handleInteractionCreate(interaction: Interaction) {
       return handleSubscribeIssueCommand(interaction);
     case "add-tag":
       return handleAddTagCommand(interaction);
+    case "link-issue":
+      return handleLinkIssueCommand(interaction);
   }
 }
 
@@ -495,6 +514,102 @@ async function handleAddTagCommand(interaction: ChatInputCommandInteraction) {
     await interaction.editReply({
       content: "Failed to add tags. Please check the logs.",
     });
+  }
+}
+
+async function handleLinkIssueCommand(
+  interaction: ChatInputCommandInteraction,
+) {
+  try {
+    if (!memberIsAdmin(interaction)) {
+      await interaction.reply({
+        content: "You don't have permission to use this command.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const channel = interaction.channel;
+    if (
+      !channel ||
+      !channel.isThread() ||
+      !channel.parentId ||
+      !config.DISCORD_CHANNEL_IDS.includes(channel.parentId)
+    ) {
+      await interaction.reply({
+        content: "This command must be used inside a forum post.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const issueNumber = interaction.options.getInteger("number", true);
+
+    let thread = store.threads.find((t) => t.id === channel.id);
+    if (thread?.number) {
+      await interaction.reply({
+        content: `This post is already linked to an issue: ${issueUrl(thread.number)}`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const conflict = store.threads.find(
+      (t) => t.number === issueNumber && t.id !== channel.id,
+    );
+    if (conflict) {
+      await interaction.reply({
+        content: `Issue #${issueNumber} is already linked to another Discord post.`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    if (!thread) {
+      thread = {
+        id: channel.id,
+        title: channel.name,
+        appliedTags: channel.appliedTags,
+        archived: false,
+        locked: false,
+        comments: [],
+      };
+      store.threads.push(thread);
+    }
+
+    await interaction.deferReply();
+
+    const starter = await channel.fetchStarterMessage().catch(() => null);
+    if (!starter) {
+      await interaction.editReply({
+        content: "Could not read the starter message of this post.",
+      });
+      return;
+    }
+
+    const result = await linkIssue(thread, issueNumber, starter);
+    if (!result.ok) {
+      await interaction.editReply({ content: result.reason });
+      return;
+    }
+
+    starter.react("👀").catch(() => undefined);
+    await interaction.editReply({
+      content: `Linked to issue [#${thread.number}](<${issueUrl(thread.number!)}>) by <@${interaction.user.id}>.`,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.stack || err.message : String(err);
+    logger.error(`/link-issue handler failed: ${msg}`);
+    const fallback = "Something went wrong while running /link-issue.";
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({ content: fallback });
+      } else {
+        await interaction.reply({ content: fallback, ephemeral: true });
+      }
+    } catch {
+      /* interaction may already be expired */
+    }
   }
 }
 
