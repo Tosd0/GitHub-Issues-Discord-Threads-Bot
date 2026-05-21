@@ -1,26 +1,31 @@
 import { Request } from "express";
 import {
+  addClosedStateTag,
   archiveThread,
   createComment,
   createThread,
   deleteThread,
   lockThread,
   notifySubscribers,
-  reactToThreadStarter,
+  removeClosedStateTag,
   unarchiveThread,
   unlockThread,
 } from "../discord/discordActions";
 import { GitHubLabel } from "../interfaces";
 import { store } from "../store";
+import { ClosedReason } from "../tagMapping";
 import { getDiscordInfoFromGithubBody } from "./githubActions";
 
-async function getIssueNodeId(req: Request): Promise<string | undefined> {
-  return req.body.issue.node_id;
+function getIssueNodeId(req: Request): string | undefined {
+  return req.body?.issue?.node_id;
 }
 
 export async function handleOpened(req: Request) {
   if (!req.body.issue) return;
   const { node_id, number, title, user, body, labels } = req.body.issue;
+  // Loop guard: if body already references a Discord URL, this issue was created
+  // from Discord by the bot — don't push it back to Discord.
+  if (getDiscordInfoFromGithubBody(body).channelId) return;
   if (store.threads.some((thread) => thread.node_id === node_id)) return;
 
   const { login } = user;
@@ -55,15 +60,17 @@ export async function handleCreated(req: Request) {
 }
 
 export async function handleClosed(req: Request) {
-  const node_id = await getIssueNodeId(req);
+  if (!req.body?.issue) return;
+  const node_id = getIssueNodeId(req);
+  const { number, title, html_url, state_reason } = req.body.issue;
+  const reason: ClosedReason =
+    state_reason === "not_planned" ? "not_planned" : "completed";
+
+  // Apply the state tag first while the thread is still un-archived; setting
+  // applied tags on an archived thread is fiddly.
+  await addClosedStateTag(node_id, reason);
   archiveThread(node_id);
 
-  const { number, title, html_url, state_reason } = req.body.issue;
-  reactToThreadStarter(
-    node_id,
-    state_reason === "not_planned" ? "❌" : "✅",
-    "👀",
-  );
   notifySubscribers(
     node_id,
     `🔴 Issue #${number} "${title}" has been closed.\n${html_url}`,
@@ -71,8 +78,10 @@ export async function handleClosed(req: Request) {
 }
 
 export async function handleReopened(req: Request) {
-  const node_id = await getIssueNodeId(req);
+  if (!req.body?.issue) return;
+  const node_id = getIssueNodeId(req);
   unarchiveThread(node_id);
+  await removeClosedStateTag(node_id);
 
   const { number, title, html_url } = req.body.issue;
   notifySubscribers(
@@ -82,16 +91,16 @@ export async function handleReopened(req: Request) {
 }
 
 export async function handleLocked(req: Request) {
-  const node_id = await getIssueNodeId(req);
-  lockThread(node_id);
+  if (!req.body?.issue) return;
+  lockThread(getIssueNodeId(req));
 }
 
 export async function handleUnlocked(req: Request) {
-  const node_id = await getIssueNodeId(req);
-  unlockThread(node_id);
+  if (!req.body?.issue) return;
+  unlockThread(getIssueNodeId(req));
 }
 
 export async function handleDeleted(req: Request) {
-  const node_id = await getIssueNodeId(req);
-  deleteThread(node_id);
+  if (!req.body?.issue) return;
+  deleteThread(getIssueNodeId(req));
 }

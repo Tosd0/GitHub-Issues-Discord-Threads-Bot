@@ -11,6 +11,7 @@ import {
   logger,
 } from "../logger";
 import { store } from "../store";
+import { ClosedReason } from "../tagMapping";
 
 export const octokit = new Octokit({
   auth: config.GITHUB_ACCESS_TOKEN,
@@ -101,12 +102,17 @@ function formatIssuesToThreads(issues: GitIssue[]): Thread[] {
   return res;
 }
 
-async function update(issue_number: number, state: "open" | "closed") {
+async function update(
+  issue_number: number,
+  state: "open" | "closed",
+  state_reason?: ClosedReason,
+) {
   try {
     await octokit.rest.issues.update({
       ...repoCredentials,
       issue_number,
       state,
+      ...(state_reason ? { state_reason } : {}),
     });
     return true;
   } catch (err) {
@@ -114,7 +120,10 @@ async function update(issue_number: number, state: "open" | "closed") {
   }
 }
 
-export async function closeIssue(thread: Thread) {
+export async function closeIssue(
+  thread: Thread,
+  state_reason?: ClosedReason,
+) {
   const { number: issue_number } = thread;
 
   if (!issue_number) {
@@ -122,7 +131,7 @@ export async function closeIssue(thread: Thread) {
     return;
   }
 
-  const response = await update(issue_number, "closed");
+  const response = await update(issue_number, "closed", state_reason);
   if (response === true) info(Actions.Closed, thread);
   else if (response instanceof Error)
     error(`Failed to close issue: ${response.message}`, thread);

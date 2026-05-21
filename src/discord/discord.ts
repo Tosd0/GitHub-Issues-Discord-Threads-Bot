@@ -5,6 +5,7 @@ import {
   SimpleShardingStrategy,
 } from "discord.js";
 import { config } from "../config";
+import { logger } from "../logger";
 import {
   handleChannelUpdate,
   handleClientReady,
@@ -36,8 +37,19 @@ const client = new Client({
   },
 });
 
+let _bootstrapped = false;
+export const isDiscordBootstrapped = () => _bootstrapped;
+
 export function initDiscord() {
-  client.once(Events.ClientReady, handleClientReady);
+  client.once(Events.ClientReady, async (c) => {
+    try {
+      await handleClientReady(c);
+      _bootstrapped = true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.stack || err.message : String(err);
+      logger.error(`Discord bootstrap failed: ${msg}`);
+    }
+  });
   client.on(Events.ThreadCreate, handleThreadCreate);
   client.on(Events.ThreadUpdate, handleThreadUpdate);
   client.on(Events.ChannelUpdate, handleChannelUpdate);

@@ -9,10 +9,42 @@ import {
   logger,
 } from "../logger";
 import { store } from "../store";
+import { ClosedReason, tagMapping } from "../tagMapping";
 import client from "./discord";
+
+export function getClosedStateTagIds(forum: ForumChannel): {
+  completed?: string;
+  not_planned?: string;
+} {
+  const find = (name: string) =>
+    name ? forum.availableTags.find((t) => t.name === name)?.id : undefined;
+  return {
+    completed: find(tagMapping.closedState.completed),
+    not_planned: find(tagMapping.closedState.not_planned),
+  };
+}
 
 const info = (action: ActionValue, thread: Thread) =>
   logger.info(`${Triggerer.Github} | ${action} | ${getDiscordUrl(thread)}`);
+
+const DISCORD_MESSAGE_MAX = 2000;
+const TRUNCATED_SUFFIX = "\n\n_(truncated)_";
+
+function buildInitialThreadContent(body: string, login: string): string {
+  const description = body && body.trim().length > 0 ? body : "_(no description)_";
+  const content = [
+    "> Generated from GitHub",
+    `**From (GitHub):** ${login}`,
+    "---",
+    description,
+  ].join("\n\n");
+
+  if (content.length <= DISCORD_MESSAGE_MAX) return content;
+  return (
+    content.slice(0, DISCORD_MESSAGE_MAX - TRUNCATED_SUFFIX.length) +
+    TRUNCATED_SUFFIX
+  );
+}
 
 export function createThread({
   body,
@@ -29,13 +61,14 @@ export function createThread({
   node_id: string;
   number: number;
 }) {
+  // Multi-channel routing not implemented; new issues always land in the first forum.
   const forum = client.channels.cache.get(
     config.DISCORD_CHANNEL_IDS[0],
   ) as ForumChannel;
   forum.threads
     .create({
       message: {
-        content: body + "/" + login, // TODO
+        content: buildInitialThreadContent(body, login),
       },
       name: title,
       appliedTags,
@@ -198,28 +231,65 @@ export async function notifySubscribers(
   );
 }
 
-export async function reactToThreadStarter(
+export async function addClosedStateTag(
   node_id: string | undefined,
-  addEmoji: string,
-  removeEmoji?: string,
+  reason: ClosedReason,
 ) {
-  const { channel } = await getThreadChannel(node_id);
-  if (!channel) return;
+  const { thread, channel } = await getThreadChannel(node_id);
+  if (!thread || !channel) return;
 
+  const forum = channel.parent;
+  if (!(forum instanceof ForumChannel)) return;
+
+  const ids = getClosedStateTagIds(forum);
+  const targetId = ids[reason];
+  if (!targetId) {
+    const tagName = tagMapping.closedState[reason];
+    logger.warn(`closed-state tag "${tagName}" not found on forum ${forum.name}`);
+    return;
+  }
+  if (channel.appliedTags.includes(targetId)) return;
+
+  // Closed state is mutually exclusive on GitHub; mirror that on Discord.
+  const otherId = reason === "completed" ? ids.not_planned : ids.completed;
+  const next = [
+    ...channel.appliedTags.filter((id) => id !== otherId),
+    targetId,
+  ];
+
+  // Sync in-memory BEFORE the Discord call so the resulting ThreadUpdate
+  // event won't be misread as a user-initiated change in handleThreadUpdate.
+  thread.appliedTags = next;
   try {
-    const starter = await channel.fetchStarterMessage();
-    if (!starter) return;
-
-    if (removeEmoji) {
-      const reaction = starter.reactions.cache.get(removeEmoji);
-      const selfId = client.user?.id;
-      if (reaction && selfId) {
-        await reaction.users.remove(selfId).catch(() => undefined);
-      }
-    }
-
-    await starter.react(addEmoji);
+    await channel.setAppliedTags(next);
   } catch (err) {
-    /* starter message may be unavailable */
+    const msg = err instanceof Error ? err.message : "unknown error";
+    logger.error(`Failed to apply closed-state tag: ${msg}`);
+  }
+}
+
+export async function removeClosedStateTag(node_id: string | undefined) {
+  const { thread, channel } = await getThreadChannel(node_id);
+  if (!thread || !channel) return;
+
+  const forum = channel.parent;
+  if (!(forum instanceof ForumChannel)) return;
+
+  const ids = getClosedStateTagIds(forum);
+  const targetIds = [ids.completed, ids.not_planned].filter(
+    (id): id is string => Boolean(id),
+  );
+  if (targetIds.length === 0) return;
+
+  const next = channel.appliedTags.filter((id) => !targetIds.includes(id));
+  if (next.length === channel.appliedTags.length) return;
+
+  // See note in addClosedStateTag — suppress reverse-sync via ThreadUpdate.
+  thread.appliedTags = next;
+  try {
+    await channel.setAppliedTags(next);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown error";
+    logger.error(`Failed to remove closed-state tag: ${msg}`);
   }
 }

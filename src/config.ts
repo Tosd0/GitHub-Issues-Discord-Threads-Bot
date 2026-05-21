@@ -10,6 +10,7 @@ const {
   DISCORD_CHANNEL_ID,
   DISCORD_ADMIN_ROLE_IDS,
   AUTO_SYNC_COMMENTS,
+  GITHUB_WEBHOOK_SECRET,
 } = process.env;
 
 const autoSyncComments = (AUTO_SYNC_COMMENTS ?? "true").trim().toLowerCase();
@@ -43,4 +44,5 @@ export const config = {
     .map((id) => id.trim())
     .filter((id) => id.length > 0),
   AUTO_SYNC_COMMENTS: AUTO_SYNC_COMMENTS_ENABLED,
+  GITHUB_WEBHOOK_SECRET: (GITHUB_WEBHOOK_SECRET ?? "").trim(),
 };

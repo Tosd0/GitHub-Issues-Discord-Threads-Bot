@@ -16,6 +16,7 @@ import {
   ThreadChannel,
 } from "discord.js";
 import { config } from "../config";
+import { getClosedStateTagIds } from "./discordActions";
 import {
   addLabelsToIssue,
   closeIssue,
@@ -32,6 +33,7 @@ import {
 } from "../github/githubActions";
 import { logger } from "../logger";
 import { store } from "../store";
+import { ClosedReason } from "../tagMapping";
 import { Thread } from "../interfaces";
 
 export async function handleClientReady(client: Client) {
@@ -175,6 +177,59 @@ export async function handleChannelUpdate(
   }
 }
 
+function syncAppliedTagsToGithub(thread: Thread, params: AnyThreadChannel) {
+  if (!thread.number) return;
+
+  const prev = thread.appliedTags;
+  const next = params.appliedTags;
+
+  if (prev.length === next.length) {
+    const prevSet = new Set(prev);
+    if (next.every((t) => prevSet.has(t))) return;
+  }
+
+  const forum = params.parent;
+  const closedIds =
+    forum instanceof ForumChannel
+      ? getClosedStateTagIds(forum)
+      : { completed: undefined, not_planned: undefined };
+  const prevSet = new Set(prev);
+  const nextSet = new Set(next);
+
+  const reasonFor = (tagId: string | undefined): ClosedReason | null => {
+    if (!tagId) return null;
+    if (tagId === closedIds.completed) return "completed";
+    if (tagId === closedIds.not_planned) return "not_planned";
+    return null;
+  };
+
+  let addedReason: ClosedReason | null = null;
+  for (const tagId of next) {
+    if (prevSet.has(tagId)) continue;
+    addedReason = reasonFor(tagId);
+    if (addedReason) break;
+  }
+
+  let removedClosedTag = false;
+  for (const tagId of prev) {
+    if (nextSet.has(tagId)) continue;
+    if (reasonFor(tagId)) {
+      removedClosedTag = true;
+      break;
+    }
+  }
+
+  // Sync in-memory tags BEFORE the GitHub call so the resulting
+  // GitHub→Discord round trip recognizes the state and skips re-applying.
+  thread.appliedTags = next;
+
+  if (addedReason) {
+    closeIssue(thread, addedReason);
+  } else if (removedClosedTag && thread.archived) {
+    openIssue(thread);
+  }
+}
+
 export async function handleThreadUpdate(params: AnyThreadChannel) {
   if (
     !params.parentId ||
@@ -185,6 +240,10 @@ export async function handleThreadUpdate(params: AnyThreadChannel) {
   const { id, archived, locked } = params.members.thread;
   const thread = store.threads.find((item) => item.id === id);
   if (!thread) return;
+
+  // Only state tags (per tagMapping.closedState) drive issue state.
+  // Other tag changes are tracked in memory but never pushed to GitHub labels.
+  syncAppliedTagsToGithub(thread, params);
 
   if (thread.locked !== locked && !thread.lockLocking) {
     if (thread.archived) {
