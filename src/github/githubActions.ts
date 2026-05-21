@@ -323,6 +323,69 @@ export async function linkIssue(
   return { ok: true };
 }
 
+export type UnlinkIssueResult =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+function stripDiscordMarker(body: string): string {
+  const match = regexForDiscordCredentials.exec(body);
+  if (!match || match.index === undefined) return body;
+
+  const after = body.slice(match.index + match[0].length);
+  if (after.trim().length > 0) return body;
+
+  let cutoff = match.index;
+  const sep = body.slice(0, cutoff).match(/\n+---\n+$/);
+  if (sep) cutoff -= sep[0].length;
+
+  return body.slice(0, cutoff).trimEnd();
+}
+
+export async function unlinkIssue(thread: Thread): Promise<UnlinkIssueResult> {
+  const issue_number = thread.number;
+  if (!issue_number) {
+    return { ok: false, reason: "This post is not linked to a GitHub issue." };
+  }
+
+  let currentBody: string;
+  try {
+    const { data } = await octokit.rest.issues.get({
+      ...repoCredentials,
+      issue_number,
+    });
+    currentBody = data.body ?? "";
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown error";
+    error(`Failed to fetch issue #${issue_number}: ${message}`, thread);
+    return { ok: false, reason: message };
+  }
+
+  const newBody = stripDiscordMarker(currentBody);
+  if (newBody !== currentBody) {
+    try {
+      await octokit.rest.issues.update({
+        ...repoCredentials,
+        issue_number,
+        body: newBody,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "unknown error";
+      error(
+        `Failed to update issue #${issue_number} body: ${message}`,
+        thread,
+      );
+      return { ok: false, reason: message };
+    }
+  }
+
+  thread.number = undefined;
+  thread.node_id = undefined;
+  thread.body = undefined;
+  thread.comments = [];
+
+  return { ok: true };
+}
+
 let cachedLabels: { names: string[]; fetchedAt: number } | null = null;
 const LABEL_CACHE_TTL = 5 * 60 * 1000;
 

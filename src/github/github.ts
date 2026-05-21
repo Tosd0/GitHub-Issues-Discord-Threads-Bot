@@ -5,7 +5,6 @@ import {
   handleCreated,
   handleDeleted,
   handleLocked,
-  handleOpened,
   handleReopened,
   handleUnlocked,
 } from "./githubHandlers";
@@ -21,7 +20,6 @@ export function initGithub() {
   const githubActions: {
     [key: string]: GithubHandlerFunction;
   } = {
-    opened: (req) => handleOpened(req),
     created: (req) => handleCreated(req),
     closed: (req) => handleClosed(req),
     reopened: (req) => handleReopened(req),
