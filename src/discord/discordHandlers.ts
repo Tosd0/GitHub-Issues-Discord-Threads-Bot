@@ -653,9 +653,9 @@ async function handleSyncToIssueCommand(
 
   const target = interaction.targetMessage;
 
-  if (target.author.id === interaction.client.user?.id) {
+  if (target.author.bot) {
     await interaction.reply({
-      content: "Cannot sync the bot's own messages.",
+      content: "Cannot sync bot messages.",
       ephemeral: true,
     });
     return;
