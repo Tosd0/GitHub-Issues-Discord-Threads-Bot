@@ -11,7 +11,8 @@ This Discord bot serves as a seamless bridge between Discord thread channel and 
     command that links an existing GitHub issue to the current forum post.
     Appends the Discord URL to the issue body if it isn't there yet, so the
     link persists across bot restarts.
--   \[ ] GitHub Issue Creation -> Pending feature: Creation of Discord posts from GitHub issues.
+-   \[ ] GitHub Issue Creation -> Not auto-mirrored. Use `/link-issue number:<n>`
+    from an existing Discord post to attach a GitHub issue manually.
 
 #### Comments
 

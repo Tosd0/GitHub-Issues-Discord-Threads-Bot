@@ -1,5 +1,4 @@
-import { ForumChannel, MessagePayload, ThreadChannel } from "discord.js";
-import { config } from "../config";
+import { MessagePayload, ThreadChannel } from "discord.js";
 import { Thread } from "../interfaces";
 import {
   ActionValue,
@@ -13,44 +12,6 @@ import client from "./discord";
 
 const info = (action: ActionValue, thread: Thread) =>
   logger.info(`${Triggerer.Github} | ${action} | ${getDiscordUrl(thread)}`);
-
-export function createThread({
-  body,
-  login,
-  title,
-  appliedTags,
-  node_id,
-  number,
-}: {
-  body: string;
-  login: string;
-  title: string;
-  appliedTags: string[];
-  node_id: string;
-  number: number;
-}) {
-  const forum = client.channels.cache.get(
-    config.DISCORD_CHANNEL_IDS[0],
-  ) as ForumChannel;
-  forum.threads
-    .create({
-      message: {
-        content: body + "/" + login, // TODO
-      },
-      name: title,
-      appliedTags,
-    })
-    .then(({ id }) => {
-      const thread = store.threads.find((thread) => thread.id === id);
-      if (!thread) return;
-
-      thread.body = body;
-      thread.node_id = node_id;
-      thread.number = number;
-
-      info(Actions.Created, thread);
-    });
-}
 
 export async function createComment({
   git_id,
