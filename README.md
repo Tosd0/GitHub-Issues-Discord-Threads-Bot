@@ -52,6 +52,22 @@ Tag mappings live in `src/tagMapping.config.json`:
 If a GitHub label is not listed in `labels`, the bot falls back to matching a
 Discord forum tag with the same name.
 
+`closedState` is reserved for issue state, not ordinary labels:
+
+- `completed` is applied when GitHub closes an issue as completed.
+- `not_planned` is applied when GitHub closes an issue as not planned.
+- Adding one of these Discord tags closes the linked GitHub issue.
+- Removing one of these Discord tags from a closed post reopens the issue.
+
+`labels` is for normal GitHub label <-> Discord forum tag mapping. Put entries
+there when the names differ. Example: `{ "github": "enhancement", "discord": "功能" }`
+means GitHub label `enhancement` maps to Discord tag `功能`. Leave `labels` empty
+when your GitHub labels and Discord tags use the same names.
+
+GitHub -> Discord label sync requires the GitHub webhook to send Issues events
+for `labeled` and `unlabeled`. Close/reopen/lock/delete syncing also uses Issues
+events, so selecting the GitHub webhook "Issues" event category is enough.
+
 #### Locking & Unlocking
 
 - \[x] Discord Post Lock/Unlock -> Corresponding action on GitHub issues for security or access control.
