@@ -10,7 +10,6 @@ import {
   handleDeleted,
   handleLabeled,
   handleLocked,
-  handleOpened,
   handleReopened,
   handleUnlabeled,
   handleUnlocked,
@@ -87,7 +86,6 @@ export function initGithub() {
   const githubActions: {
     [key: string]: GithubHandlerFunction;
   } = {
-    opened: (req) => handleOpened(req),
     created: (req) => handleCreated(req),
     closed: (req) => handleClosed(req),
     reopened: (req) => handleReopened(req),

@@ -32,6 +32,7 @@ import {
   listRepoLabels,
   lockIssue,
   openIssue,
+  unlinkIssue,
   unlockIssue,
 } from "../github/githubActions";
 import { logger } from "../logger";
@@ -139,6 +140,13 @@ export async function handleClientReady(client: Client) {
               minValue: 1,
             },
           ],
+        },
+        {
+          name: "unlink-issue",
+          description:
+            "Detach the GitHub issue from this forum post without deleting either side. (Admin only)",
+          type: ApplicationCommandType.ChatInput,
+          dmPermission: false,
         },
       ]);
       logger.info(`Slash commands registered in guild ${guild.name}.`);
@@ -347,6 +355,8 @@ export async function handleInteractionCreate(interaction: Interaction) {
       return handleAddTagCommand(interaction);
     case "link-issue":
       return handleLinkIssueCommand(interaction);
+    case "unlink-issue":
+      return handleUnlinkIssueCommand(interaction);
   }
 }
 
@@ -651,6 +661,58 @@ async function handleLinkIssueCommand(
     const msg = err instanceof Error ? err.stack || err.message : String(err);
     logger.error(`/link-issue handler failed: ${msg}`);
     const fallback = "Something went wrong while running /link-issue.";
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({ content: fallback });
+      } else {
+        await interaction.reply({ content: fallback, ephemeral: true });
+      }
+    } catch {
+      /* interaction may already be expired */
+    }
+  }
+}
+
+async function handleUnlinkIssueCommand(
+  interaction: ChatInputCommandInteraction,
+) {
+  try {
+    if (!memberIsAdmin(interaction)) {
+      await interaction.reply({
+        content: "You don't have permission to use this command.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const channel = await ensureForumThread(interaction);
+    if (!channel) return;
+
+    const thread = store.threads.find((t) => t.id === channel.id);
+    if (!thread || !thread.number) {
+      await interaction.reply({
+        content: "This post is not linked to a GitHub issue.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const issueNumber = thread.number;
+    await interaction.deferReply();
+
+    const result = await unlinkIssue(thread);
+    if (!result.ok) {
+      await interaction.editReply({ content: result.reason });
+      return;
+    }
+
+    await interaction.editReply({
+      content: `Unlinked issue [#${issueNumber}](<${issueUrl(issueNumber)}>) from this post by <@${interaction.user.id}>. The issue and this post both remain; deleting/closing this post will no longer affect the issue.`,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.stack || err.message : String(err);
+    logger.error(`/unlink-issue handler failed: ${msg}`);
+    const fallback = "Something went wrong while running /unlink-issue.";
     try {
       if (interaction.deferred || interaction.replied) {
         await interaction.editReply({ content: fallback });

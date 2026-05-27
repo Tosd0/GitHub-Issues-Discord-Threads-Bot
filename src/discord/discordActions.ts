@@ -1,5 +1,4 @@
 import { ForumChannel, MessagePayload, ThreadChannel } from "discord.js";
-import { config } from "../config";
 import { Thread } from "../interfaces";
 import {
   ActionValue,
@@ -50,65 +49,6 @@ export function getClosedStateTagIds(forum: ForumChannel): {
 
 const info = (action: ActionValue, thread: Thread) =>
   logger.info(`${Triggerer.Github} | ${action} | ${getDiscordUrl(thread)}`);
-
-const DISCORD_MESSAGE_MAX = 2000;
-const TRUNCATED_SUFFIX = "\n\n_(truncated)_";
-
-function buildInitialThreadContent(body: string, login: string): string {
-  const description =
-    body && body.trim().length > 0 ? body : "_(no description)_";
-  const content = [
-    "> Generated from GitHub",
-    `**From (GitHub):** ${login}`,
-    "---",
-    description,
-  ].join("\n\n");
-
-  if (content.length <= DISCORD_MESSAGE_MAX) return content;
-  return (
-    content.slice(0, DISCORD_MESSAGE_MAX - TRUNCATED_SUFFIX.length) +
-    TRUNCATED_SUFFIX
-  );
-}
-
-export function createThread({
-  body,
-  login,
-  title,
-  appliedTags,
-  node_id,
-  number,
-}: {
-  body: string;
-  login: string;
-  title: string;
-  appliedTags: string[];
-  node_id: string;
-  number: number;
-}) {
-  // Multi-channel routing not implemented; new issues always land in the first forum.
-  const forum = client.channels.cache.get(
-    config.DISCORD_CHANNEL_IDS[0],
-  ) as ForumChannel;
-  forum.threads
-    .create({
-      message: {
-        content: buildInitialThreadContent(body, login),
-      },
-      name: title,
-      appliedTags,
-    })
-    .then(({ id }) => {
-      const thread = store.threads.find((thread) => thread.id === id);
-      if (!thread) return;
-
-      thread.body = body;
-      thread.node_id = node_id;
-      thread.number = number;
-
-      info(Actions.Created, thread);
-    });
-}
 
 export async function createComment({
   git_id,
@@ -258,6 +198,32 @@ export async function notifySubscribers(
       }
     }),
   );
+}
+
+export async function reactToThreadStarter(
+  node_id: string | undefined,
+  addEmoji: string,
+  removeEmoji?: string,
+) {
+  const { channel } = await getThreadChannel(node_id);
+  if (!channel) return;
+
+  try {
+    const starter = await channel.fetchStarterMessage();
+    if (!starter) return;
+
+    if (removeEmoji) {
+      const reaction = starter.reactions.cache.get(removeEmoji);
+      const selfId = client.user?.id;
+      if (reaction && selfId) {
+        await reaction.users.remove(selfId).catch(() => undefined);
+      }
+    }
+
+    await starter.react(addEmoji);
+  } catch (err) {
+    /* starter message may be unavailable */
+  }
 }
 
 export async function addClosedStateTag(

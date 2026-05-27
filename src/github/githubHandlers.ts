@@ -3,46 +3,20 @@ import {
   addClosedStateTag,
   archiveThread,
   createComment,
-  createThread,
   deleteThread,
   lockThread,
   notifySubscribers,
+  reactToThreadStarter,
   removeClosedStateTag,
   syncIssueLabelTag,
   unarchiveThread,
   unlockThread,
 } from "../discord/discordActions";
-import { GitHubLabel } from "../interfaces";
-import { store } from "../store";
-import {
-  ClosedReason,
-  getDiscordTagNameForGithubLabel,
-  isClosedStateDiscordTagName,
-} from "../tagMapping";
+import { ClosedReason } from "../tagMapping";
 import { getDiscordInfoFromGithubBody } from "./githubActions";
 
 function getIssueNodeId(req: Request): string | undefined {
   return req.body?.issue?.node_id;
-}
-
-export async function handleOpened(req: Request) {
-  if (!req.body.issue) return;
-  const { node_id, number, title, user, body, labels } = req.body.issue;
-  // Loop guard: if body already references a Discord URL, this issue was created
-  // from Discord by the bot — don't push it back to Discord.
-  if (getDiscordInfoFromGithubBody(body).channelId) return;
-  if (store.threads.some((thread) => thread.node_id === node_id)) return;
-
-  const { login } = user;
-  const appliedTags = (<GitHubLabel[]>labels)
-    .map((label) => getDiscordTagNameForGithubLabel(label.name))
-    .filter((tagName) => !isClosedStateDiscordTagName(tagName))
-    .map(
-      (tagName) => store.availableTags.find((tag) => tag.name === tagName)?.id,
-    )
-    .filter((id): id is string => Boolean(id));
-
-  createThread({ login, appliedTags, number, title, body, node_id });
 }
 
 export async function handleCreated(req: Request) {
@@ -67,6 +41,7 @@ export async function handleCreated(req: Request) {
 
 export async function handleClosed(req: Request) {
   if (!req.body?.issue) return;
+
   const node_id = getIssueNodeId(req);
   const { number, title, html_url, state_reason } = req.body.issue;
   const reason: ClosedReason =
@@ -76,6 +51,11 @@ export async function handleClosed(req: Request) {
   // applied tags on an archived thread is fiddly.
   await addClosedStateTag(node_id, reason);
   archiveThread(node_id);
+  reactToThreadStarter(
+    node_id,
+    state_reason === "not_planned" ? "❌" : "✅",
+    "👀",
+  );
 
   notifySubscribers(
     node_id,
@@ -85,6 +65,7 @@ export async function handleClosed(req: Request) {
 
 export async function handleReopened(req: Request) {
   if (!req.body?.issue) return;
+
   const node_id = getIssueNodeId(req);
   unarchiveThread(node_id);
   await removeClosedStateTag(node_id);
