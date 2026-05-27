@@ -11,7 +11,7 @@ import {
   logger,
 } from "../logger";
 import { store } from "../store";
-import { ClosedReason } from "../tagMapping";
+import { ClosedReason, getGithubLabelNameForDiscordTag } from "../tagMapping";
 
 export const octokit = new Octokit({
   auth: config.GITHUB_ACCESS_TOKEN,
@@ -120,10 +120,7 @@ async function update(
   }
 }
 
-export async function closeIssue(
-  thread: Thread,
-  state_reason?: ClosedReason,
-) {
+export async function closeIssue(thread: Thread, state_reason?: ClosedReason) {
   const { number: issue_number } = thread;
 
   if (!issue_number) {
@@ -208,9 +205,12 @@ export async function createIssue(thread: Thread, params: Message) {
   }
 
   try {
-    const labels = appliedTags?.map(
-      (id) => store.availableTags.find((item) => item.id === id)?.name || "",
-    );
+    const labels = appliedTags
+      ?.map((id) => store.availableTags.find((item) => item.id === id)?.name)
+      .map((tagName) =>
+        tagName ? getGithubLabelNameForDiscordTag(tagName) : undefined,
+      )
+      .filter((label): label is string => Boolean(label));
 
     const body = getIssueBody(params);
     const response = await octokit.rest.issues.create({
@@ -268,10 +268,7 @@ export async function linkIssue(
   }
 
   const existingDiscord = getDiscordInfoFromGithubBody(issueData.body);
-  if (
-    existingDiscord.channelId &&
-    existingDiscord.channelId !== thread.id
-  ) {
+  if (existingDiscord.channelId && existingDiscord.channelId !== thread.id) {
     return {
       ok: false,
       code: "already_linked",
@@ -283,9 +280,7 @@ export async function linkIssue(
   if (!existingDiscord.id) {
     const discordUrl = `https://discord.com/channels/${starter.guildId}/${starter.channelId}/${starter.id}`;
     body =
-      body.length > 0
-        ? `${body}\n\n---\n\n${discordUrl}\n`
-        : `${discordUrl}\n`;
+      body.length > 0 ? `${body}\n\n---\n\n${discordUrl}\n` : `${discordUrl}\n`;
 
     try {
       await octokit.rest.issues.update({
@@ -295,10 +290,7 @@ export async function linkIssue(
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "unknown error";
-      error(
-        `Failed to update issue #${issue_number} body: ${message}`,
-        thread,
-      );
+      error(`Failed to update issue #${issue_number} body: ${message}`, thread);
       return { ok: false, reason: message };
     }
   }
@@ -310,10 +302,11 @@ export async function linkIssue(
   thread.archived = issueData.state === "closed";
 
   try {
-    const comments = await octokit.paginate(
-      octokit.rest.issues.listComments,
-      { ...repoCredentials, issue_number, per_page: 100 },
-    );
+    const comments = await octokit.paginate(octokit.rest.issues.listComments, {
+      ...repoCredentials,
+      issue_number,
+      per_page: 100,
+    });
     for (const comment of comments) {
       const { channelId, id } = getDiscordInfoFromGithubBody(comment.body);
       if (!id || channelId !== thread.id) continue;

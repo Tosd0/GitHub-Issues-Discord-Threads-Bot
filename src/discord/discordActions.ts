@@ -9,8 +9,32 @@ import {
   logger,
 } from "../logger";
 import { store } from "../store";
-import { ClosedReason, tagMapping } from "../tagMapping";
+import {
+  ClosedReason,
+  getDiscordTagNameForGithubLabel,
+  isClosedStateDiscordTagName,
+  tagMapping,
+} from "../tagMapping";
 import client from "./discord";
+
+const DISCORD_TO_GITHUB_SUPPRESSION_MS = 5_000;
+
+function suppressDiscordToGithubSync(thread: Thread) {
+  const until = Date.now() + DISCORD_TO_GITHUB_SUPPRESSION_MS;
+  thread.discordToGithubSyncSuppressedUntil = Math.max(
+    thread.discordToGithubSyncSuppressedUntil ?? 0,
+    until,
+  );
+}
+
+export function isDiscordToGithubSyncSuppressed(thread: Thread) {
+  const until = thread.discordToGithubSyncSuppressedUntil;
+  if (!until) return false;
+  if (Date.now() <= until) return true;
+
+  thread.discordToGithubSyncSuppressedUntil = undefined;
+  return false;
+}
 
 export function getClosedStateTagIds(forum: ForumChannel): {
   completed?: string;
@@ -31,7 +55,8 @@ const DISCORD_MESSAGE_MAX = 2000;
 const TRUNCATED_SUFFIX = "\n\n_(truncated)_";
 
 function buildInitialThreadContent(body: string, login: string): string {
-  const description = body && body.trim().length > 0 ? body : "_(no description)_";
+  const description =
+    body && body.trim().length > 0 ? body : "_(no description)_";
   const content = [
     "> Generated from GitHub",
     `**From (GitHub):** ${login}`,
@@ -127,6 +152,7 @@ export async function archiveThread(node_id: string | undefined) {
 
   info(Actions.Closed, thread);
 
+  suppressDiscordToGithubSync(thread);
   thread.archived = true;
   channel.setArchived(true);
 }
@@ -137,6 +163,7 @@ export async function unarchiveThread(node_id: string | undefined) {
 
   info(Actions.Reopened, thread);
 
+  suppressDiscordToGithubSync(thread);
   thread.archived = false;
   channel.setArchived(false);
 }
@@ -147,6 +174,7 @@ export async function lockThread(node_id: string | undefined) {
 
   info(Actions.Locked, thread);
 
+  suppressDiscordToGithubSync(thread);
   thread.locked = true;
   if (channel.archived) {
     thread.lockArchiving = true;
@@ -165,6 +193,7 @@ export async function unlockThread(node_id: string | undefined) {
 
   info(Actions.Unlocked, thread);
 
+  suppressDiscordToGithubSync(thread);
   thread.locked = false;
   if (channel.archived) {
     thread.lockArchiving = true;
@@ -245,7 +274,9 @@ export async function addClosedStateTag(
   const targetId = ids[reason];
   if (!targetId) {
     const tagName = tagMapping.closedState[reason];
-    logger.warn(`closed-state tag "${tagName}" not found on forum ${forum.name}`);
+    logger.warn(
+      `closed-state tag "${tagName}" not found on forum ${forum.name}`,
+    );
     return;
   }
   if (channel.appliedTags.includes(targetId)) return;
@@ -259,6 +290,7 @@ export async function addClosedStateTag(
 
   // Sync in-memory BEFORE the Discord call so the resulting ThreadUpdate
   // event won't be misread as a user-initiated change in handleThreadUpdate.
+  suppressDiscordToGithubSync(thread);
   thread.appliedTags = next;
   try {
     await channel.setAppliedTags(next);
@@ -285,11 +317,56 @@ export async function removeClosedStateTag(node_id: string | undefined) {
   if (next.length === channel.appliedTags.length) return;
 
   // See note in addClosedStateTag — suppress reverse-sync via ThreadUpdate.
+  suppressDiscordToGithubSync(thread);
   thread.appliedTags = next;
   try {
     await channel.setAppliedTags(next);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown error";
     logger.error(`Failed to remove closed-state tag: ${msg}`);
+  }
+}
+
+export async function syncIssueLabelTag(
+  node_id: string | undefined,
+  labelName: string | undefined,
+  action: "add" | "remove",
+) {
+  if (!labelName) return;
+
+  const { thread, channel } = await getThreadChannel(node_id);
+  if (!thread || !channel) return;
+
+  const forum = channel.parent;
+  if (!(forum instanceof ForumChannel)) return;
+
+  const discordTagName = getDiscordTagNameForGithubLabel(labelName);
+  if (isClosedStateDiscordTagName(discordTagName)) return;
+
+  const tagId = forum.availableTags.find(
+    (tag) => tag.name === discordTagName,
+  )?.id;
+  if (!tagId) return;
+
+  const tagSet = new Set(channel.appliedTags);
+  action === "add" ? tagSet.add(tagId) : tagSet.delete(tagId);
+
+  const next = Array.from(tagSet);
+  if (
+    next.length === channel.appliedTags.length &&
+    next.every((id) => channel.appliedTags.includes(id))
+  ) {
+    return;
+  }
+
+  suppressDiscordToGithubSync(thread);
+  thread.appliedTags = next;
+  try {
+    await channel.setAppliedTags(next);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown error";
+    logger.error(
+      `Failed to sync issue label "${labelName}" to Discord tag "${discordTagName}": ${msg}`,
+    );
   }
 }

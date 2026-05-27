@@ -8,12 +8,17 @@ import {
   lockThread,
   notifySubscribers,
   removeClosedStateTag,
+  syncIssueLabelTag,
   unarchiveThread,
   unlockThread,
 } from "../discord/discordActions";
 import { GitHubLabel } from "../interfaces";
 import { store } from "../store";
-import { ClosedReason } from "../tagMapping";
+import {
+  ClosedReason,
+  getDiscordTagNameForGithubLabel,
+  isClosedStateDiscordTagName,
+} from "../tagMapping";
 import { getDiscordInfoFromGithubBody } from "./githubActions";
 
 function getIssueNodeId(req: Request): string | undefined {
@@ -30,11 +35,12 @@ export async function handleOpened(req: Request) {
 
   const { login } = user;
   const appliedTags = (<GitHubLabel[]>labels)
+    .map((label) => getDiscordTagNameForGithubLabel(label.name))
+    .filter((tagName) => !isClosedStateDiscordTagName(tagName))
     .map(
-      (label) =>
-        store.availableTags.find((tag) => tag.name === label.name)?.id || "",
+      (tagName) => store.availableTags.find((tag) => tag.name === tagName)?.id,
     )
-    .filter((i) => i);
+    .filter((id): id is string => Boolean(id));
 
   createThread({ login, appliedTags, number, title, body, node_id });
 }
@@ -88,6 +94,16 @@ export async function handleReopened(req: Request) {
     node_id,
     `🟢 Issue #${number} "${title}" has been reopened.\n${html_url}`,
   );
+}
+
+export async function handleLabeled(req: Request) {
+  if (!req.body?.issue) return;
+  await syncIssueLabelTag(getIssueNodeId(req), req.body.label?.name, "add");
+}
+
+export async function handleUnlabeled(req: Request) {
+  if (!req.body?.issue) return;
+  await syncIssueLabelTag(getIssueNodeId(req), req.body.label?.name, "remove");
 }
 
 export async function handleLocked(req: Request) {

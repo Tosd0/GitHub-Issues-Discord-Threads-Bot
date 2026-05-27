@@ -26,7 +26,25 @@ This Discord bot serves as a seamless bridge between Discord thread channel and 
 
 -   \[x] Discord Post Tags -> Translated into GitHub issue labels for better categorization.
 -   \[ ] Discord Post Tag Changes -> Future implementation: Update GitHub issue labels from Discord.
--   \[ ] GitHub Issue Label Changes -> Future implementation: Reflect changes in Discord post tags from GitHub.
+-   \[x] GitHub Issue Label Changes -> Reflect GitHub label add/remove actions in Discord post tags.
+
+Tag mappings live in `src/tagMapping.config.json`:
+
+```json
+{
+  "closedState": {
+    "completed": "已解决",
+    "not_planned": "无效"
+  },
+  "labels": [
+    { "github": "bug", "discord": "Bug" },
+    { "github": "enhancement", "discord": "功能" }
+  ]
+}
+```
+
+If a GitHub label is not listed in `labels`, the bot falls back to matching a
+Discord forum tag with the same name.
 
 #### Locking & Unlocking
 

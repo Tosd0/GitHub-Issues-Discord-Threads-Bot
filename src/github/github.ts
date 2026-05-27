@@ -8,9 +8,11 @@ import {
   handleClosed,
   handleCreated,
   handleDeleted,
+  handleLabeled,
   handleLocked,
   handleOpened,
   handleReopened,
+  handleUnlabeled,
   handleUnlocked,
 } from "./githubHandlers";
 
@@ -42,9 +44,7 @@ function verifyGithubSignature(
   const header = req.headers["x-hub-signature-256"];
   const signature = Array.isArray(header) ? header[0] : header;
   if (!signature || !signature.startsWith("sha256=")) {
-    logger.warn(
-      "webhook signature missing or malformed; rejecting with 401",
-    );
+    logger.warn("webhook signature missing or malformed; rejecting with 401");
     return res.status(401).json({ msg: "invalid signature" });
   }
 
@@ -91,6 +91,8 @@ export function initGithub() {
     created: (req) => handleCreated(req),
     closed: (req) => handleClosed(req),
     reopened: (req) => handleReopened(req),
+    labeled: (req) => handleLabeled(req),
+    unlabeled: (req) => handleUnlabeled(req),
     locked: (req) => handleLocked(req),
     unlocked: (req) => handleUnlocked(req),
     deleted: (req) => handleDeleted(req),

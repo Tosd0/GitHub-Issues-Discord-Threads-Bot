@@ -16,7 +16,10 @@ import {
   ThreadChannel,
 } from "discord.js";
 import { config } from "../config";
-import { getClosedStateTagIds } from "./discordActions";
+import {
+  getClosedStateTagIds,
+  isDiscordToGithubSyncSuppressed,
+} from "./discordActions";
 import {
   addLabelsToIssue,
   closeIssue,
@@ -149,10 +152,7 @@ export async function handleClientReady(client: Client) {
 }
 
 export async function handleThreadCreate(params: AnyThreadChannel) {
-  if (
-    !params.parentId ||
-    !config.DISCORD_CHANNEL_IDS.includes(params.parentId)
-  )
+  if (!params.parentId || !config.DISCORD_CHANNEL_IDS.includes(params.parentId))
     return;
 
   const { id, name, appliedTags } = params;
@@ -177,7 +177,11 @@ export async function handleChannelUpdate(
   }
 }
 
-function syncAppliedTagsToGithub(thread: Thread, params: AnyThreadChannel) {
+function syncAppliedTagsToGithub(
+  thread: Thread,
+  params: AnyThreadChannel,
+  suppressGithubSync: boolean,
+) {
   if (!thread.number) return;
 
   const prev = thread.appliedTags;
@@ -223,6 +227,8 @@ function syncAppliedTagsToGithub(thread: Thread, params: AnyThreadChannel) {
   // GitHub→Discord round trip recognizes the state and skips re-applying.
   thread.appliedTags = next;
 
+  if (suppressGithubSync) return;
+
   if (addedReason) {
     closeIssue(thread, addedReason);
   } else if (removedClosedTag && thread.archived) {
@@ -231,28 +237,35 @@ function syncAppliedTagsToGithub(thread: Thread, params: AnyThreadChannel) {
 }
 
 export async function handleThreadUpdate(params: AnyThreadChannel) {
-  if (
-    !params.parentId ||
-    !config.DISCORD_CHANNEL_IDS.includes(params.parentId)
-  )
+  if (!params.parentId || !config.DISCORD_CHANNEL_IDS.includes(params.parentId))
     return;
 
   const { id, archived, locked } = params.members.thread;
   const thread = store.threads.find((item) => item.id === id);
   if (!thread) return;
+  const suppressGithubSync = isDiscordToGithubSyncSuppressed(thread);
 
   // Only state tags (per tagMapping.closedState) drive issue state.
   // Other tag changes are tracked in memory but never pushed to GitHub labels.
-  syncAppliedTagsToGithub(thread, params);
+  syncAppliedTagsToGithub(thread, params, suppressGithubSync);
 
   if (thread.locked !== locked && !thread.lockLocking) {
-    if (thread.archived) {
-      thread.lockArchiving = true;
+    if (suppressGithubSync) {
+      thread.locked = locked;
+    } else {
+      if (thread.archived) {
+        thread.lockArchiving = true;
+      }
+      thread.locked = locked;
+      locked ? lockIssue(thread) : unlockIssue(thread);
     }
-    thread.locked = locked;
-    locked ? lockIssue(thread) : unlockIssue(thread);
   }
   if (thread.archived !== archived) {
+    if (suppressGithubSync) {
+      thread.archived = archived;
+      return;
+    }
+
     setTimeout(() => {
       // timeout for fixing discord archived post locking
       if (thread.lockArchiving) {
@@ -295,10 +308,7 @@ export async function handleMessageDelete(params: Message | PartialMessage) {
 }
 
 export async function handleThreadDelete(params: AnyThreadChannel) {
-  if (
-    !params.parentId ||
-    !config.DISCORD_CHANNEL_IDS.includes(params.parentId)
-  )
+  if (!params.parentId || !config.DISCORD_CHANNEL_IDS.includes(params.parentId))
     return;
 
   const thread = store.threads.find((item) => item.id === params.id);
