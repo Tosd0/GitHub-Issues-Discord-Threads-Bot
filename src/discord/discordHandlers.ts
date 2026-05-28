@@ -18,7 +18,7 @@ import {
 import { config } from "../config";
 import {
   getClosedStateTagIds,
-  isDiscordToGithubSyncSuppressed,
+  resolvePendingDiscordSync,
 } from "./discordActions";
 import {
   addLabelsToIssue,
@@ -38,6 +38,7 @@ import {
 import { logger } from "../logger";
 import { store } from "../store";
 import { ClosedReason } from "../tagMapping";
+import { areTagSetsEqual } from "../utils/tagSets";
 import { Thread } from "../interfaces";
 
 export async function handleClientReady(client: Client) {
@@ -185,20 +186,26 @@ export async function handleChannelUpdate(
   }
 }
 
-function syncAppliedTagsToGithub(
+async function fetchLatestThreadChannel(params: AnyThreadChannel) {
+  try {
+    return await params.fetch();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown error";
+    logger.warn(
+      `Skipping Discord→GitHub sync for thread ${params.id}; failed to fetch latest thread state: ${msg}`,
+    );
+    return undefined;
+  }
+}
+
+async function syncAppliedTagsToGithub(
   thread: Thread,
   params: AnyThreadChannel,
-  suppressGithubSync: boolean,
 ) {
-  if (!thread.number) return;
-
   const prev = thread.appliedTags;
   const next = params.appliedTags;
 
-  if (prev.length === next.length) {
-    const prevSet = new Set(prev);
-    if (next.every((t) => prevSet.has(t))) return;
-  }
+  if (areTagSetsEqual(prev, next)) return;
 
   const forum = params.parent;
   const closedIds =
@@ -235,12 +242,12 @@ function syncAppliedTagsToGithub(
   // GitHub→Discord round trip recognizes the state and skips re-applying.
   thread.appliedTags = next;
 
-  if (suppressGithubSync) return;
+  if (!thread.number) return;
 
   if (addedReason) {
-    closeIssue(thread, addedReason);
-  } else if (removedClosedTag && thread.archived) {
-    openIssue(thread);
+    await closeIssue(thread, addedReason);
+  } else if (removedClosedTag && params.members.thread.archived) {
+    await openIssue(thread);
   }
 }
 
@@ -248,44 +255,31 @@ export async function handleThreadUpdate(params: AnyThreadChannel) {
   if (!params.parentId || !config.DISCORD_CHANNEL_IDS.includes(params.parentId))
     return;
 
-  const { id, archived, locked } = params.members.thread;
+  const latest = await fetchLatestThreadChannel(params);
+  if (!latest) return;
+
+  const { id, archived, locked } = latest.members.thread;
   const thread = store.threads.find((item) => item.id === id);
   if (!thread) return;
-  const suppressGithubSync = isDiscordToGithubSyncSuppressed(thread);
+  const pending = resolvePendingDiscordSync(thread, {
+    appliedTags: latest.appliedTags,
+    archived,
+    locked,
+  });
 
   // Only state tags (per tagMapping.closedState) drive issue state.
   // Other tag changes are tracked in memory but never pushed to GitHub labels.
-  syncAppliedTagsToGithub(thread, params, suppressGithubSync);
-
-  if (thread.locked !== locked && !thread.lockLocking) {
-    if (suppressGithubSync) {
-      thread.locked = locked;
-    } else {
-      if (thread.archived) {
-        thread.lockArchiving = true;
-      }
-      thread.locked = locked;
-      locked ? lockIssue(thread) : unlockIssue(thread);
-    }
+  if (!pending.appliedTags) {
+    await syncAppliedTagsToGithub(thread, latest);
   }
-  if (thread.archived !== archived) {
-    if (suppressGithubSync) {
-      thread.archived = archived;
-      return;
-    }
 
-    setTimeout(() => {
-      // timeout for fixing discord archived post locking
-      if (thread.lockArchiving) {
-        if (archived) {
-          thread.lockArchiving = false;
-        }
-        thread.lockLocking = false;
-        return;
-      }
-      thread.archived = archived;
-      archived ? closeIssue(thread) : openIssue(thread);
-    }, 500);
+  if (!pending.locked && thread.locked !== locked) {
+    thread.locked = locked;
+    locked ? await lockIssue(thread) : await unlockIssue(thread);
+  }
+  if (!pending.archived && thread.archived !== archived) {
+    thread.archived = archived;
+    archived ? await closeIssue(thread) : await openIssue(thread);
   }
 }
 

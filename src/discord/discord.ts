@@ -6,6 +6,7 @@ import {
 } from "discord.js";
 import { config } from "../config";
 import { logger } from "../logger";
+import { createSerialQueue } from "../utils/serialQueue";
 import {
   handleChannelUpdate,
   handleClientReady,
@@ -40,6 +41,8 @@ const client = new Client({
 let _bootstrapped = false;
 export const isDiscordBootstrapped = () => _bootstrapped;
 
+const enqueueThreadUpdate = createSerialQueue<string>();
+
 export function initDiscord() {
   client.once(Events.ClientReady, async (c) => {
     try {
@@ -51,8 +54,17 @@ export function initDiscord() {
     }
   });
   client.on(Events.ThreadCreate, handleThreadCreate);
-  client.on(Events.ThreadUpdate, handleThreadUpdate);
-  client.on(Events.ChannelUpdate, handleChannelUpdate);
+  client.on(Events.ThreadUpdate, (_oldThread, newThread) => {
+    void enqueueThreadUpdate(newThread.id, () =>
+      handleThreadUpdate(newThread),
+    ).catch((err) => {
+      const msg = err instanceof Error ? err.stack || err.message : String(err);
+      logger.error(`Thread update handler failed: ${msg}`);
+    });
+  });
+  client.on(Events.ChannelUpdate, (_oldChannel, newChannel) =>
+    handleChannelUpdate(newChannel),
+  );
   client.on(Events.MessageCreate, handleMessageCreate);
   client.on(Events.ThreadDelete, handleThreadDelete);
   client.on(Events.MessageDelete, handleMessageDelete);

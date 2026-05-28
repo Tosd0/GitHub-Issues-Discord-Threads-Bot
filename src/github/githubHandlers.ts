@@ -50,14 +50,14 @@ export async function handleClosed(req: Request) {
   // Apply the state tag first while the thread is still un-archived; setting
   // applied tags on an archived thread is fiddly.
   await addClosedStateTag(node_id, reason);
-  archiveThread(node_id);
-  reactToThreadStarter(
+  await archiveThread(node_id);
+  await reactToThreadStarter(
     node_id,
     state_reason === "not_planned" ? "❌" : "✅",
     "👀",
   );
 
-  notifySubscribers(
+  await notifySubscribers(
     node_id,
     `🔴 Issue #${number} "${title}" has been closed.\n${html_url}`,
   );
@@ -67,11 +67,11 @@ export async function handleReopened(req: Request) {
   if (!req.body?.issue) return;
 
   const node_id = getIssueNodeId(req);
-  unarchiveThread(node_id);
+  await unarchiveThread(node_id);
   await removeClosedStateTag(node_id);
 
   const { number, title, html_url } = req.body.issue;
-  notifySubscribers(
+  await notifySubscribers(
     node_id,
     `🟢 Issue #${number} "${title}" has been reopened.\n${html_url}`,
   );
@@ -89,15 +89,15 @@ export async function handleUnlabeled(req: Request) {
 
 export async function handleLocked(req: Request) {
   if (!req.body?.issue) return;
-  lockThread(getIssueNodeId(req));
+  await lockThread(getIssueNodeId(req));
 }
 
 export async function handleUnlocked(req: Request) {
   if (!req.body?.issue) return;
-  unlockThread(getIssueNodeId(req));
+  await unlockThread(getIssueNodeId(req));
 }
 
 export async function handleDeleted(req: Request) {
   if (!req.body?.issue) return;
-  deleteThread(getIssueNodeId(req));
+  await deleteThread(getIssueNodeId(req));
 }

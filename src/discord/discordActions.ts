@@ -14,25 +14,67 @@ import {
   isClosedStateDiscordTagName,
   tagMapping,
 } from "../tagMapping";
+import { areTagSetsEqual } from "../utils/tagSets";
 import client from "./discord";
 
-const DISCORD_TO_GITHUB_SUPPRESSION_MS = 5_000;
+type PendingDiscordSyncField = "appliedTags" | "archived" | "locked";
 
-function suppressDiscordToGithubSync(thread: Thread) {
-  const until = Date.now() + DISCORD_TO_GITHUB_SUPPRESSION_MS;
-  thread.discordToGithubSyncSuppressedUntil = Math.max(
-    thread.discordToGithubSyncSuppressedUntil ?? 0,
-    until,
-  );
+function clearPendingDiscordSyncField(
+  thread: Thread,
+  field: PendingDiscordSyncField,
+) {
+  if (!thread.pendingDiscordSync) return;
+
+  delete thread.pendingDiscordSync[field];
+  if (Object.keys(thread.pendingDiscordSync).length === 0) {
+    thread.pendingDiscordSync = undefined;
+  }
 }
 
-export function isDiscordToGithubSyncSuppressed(thread: Thread) {
-  const until = thread.discordToGithubSyncSuppressedUntil;
-  if (!until) return false;
-  if (Date.now() <= until) return true;
+function setPendingDiscordSync(
+  thread: Thread,
+  pending: NonNullable<Thread["pendingDiscordSync"]>,
+) {
+  thread.pendingDiscordSync = {
+    ...thread.pendingDiscordSync,
+    ...pending,
+  };
+}
 
-  thread.discordToGithubSyncSuppressedUntil = undefined;
-  return false;
+export function resolvePendingDiscordSync(
+  thread: Thread,
+  current: {
+    appliedTags: string[];
+    archived: boolean | null;
+    locked: boolean | null;
+  },
+) {
+  const pending = thread.pendingDiscordSync;
+  const handled = {
+    appliedTags: Boolean(pending?.appliedTags),
+    archived: pending?.archived !== undefined,
+    locked: pending?.locked !== undefined,
+  };
+
+  if (
+    pending?.appliedTags &&
+    areTagSetsEqual(current.appliedTags, pending.appliedTags)
+  ) {
+    thread.appliedTags = current.appliedTags;
+    clearPendingDiscordSyncField(thread, "appliedTags");
+  }
+
+  if (pending?.archived === current.archived) {
+    thread.archived = current.archived;
+    clearPendingDiscordSyncField(thread, "archived");
+  }
+
+  if (pending?.locked === current.locked) {
+    thread.locked = current.locked;
+    clearPendingDiscordSyncField(thread, "locked");
+  }
+
+  return handled;
 }
 
 export function getClosedStateTagIds(forum: ForumChannel): {
@@ -92,9 +134,16 @@ export async function archiveThread(node_id: string | undefined) {
 
   info(Actions.Closed, thread);
 
-  suppressDiscordToGithubSync(thread);
-  thread.archived = true;
-  channel.setArchived(true);
+  setPendingDiscordSync(thread, { archived: true });
+  try {
+    await channel.setArchived(true);
+    thread.archived = true;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown error";
+    logger.error(`Failed to archive thread: ${msg}`);
+  } finally {
+    clearPendingDiscordSyncField(thread, "archived");
+  }
 }
 
 export async function unarchiveThread(node_id: string | undefined) {
@@ -103,9 +152,16 @@ export async function unarchiveThread(node_id: string | undefined) {
 
   info(Actions.Reopened, thread);
 
-  suppressDiscordToGithubSync(thread);
-  thread.archived = false;
-  channel.setArchived(false);
+  setPendingDiscordSync(thread, { archived: false });
+  try {
+    await channel.setArchived(false);
+    thread.archived = false;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown error";
+    logger.error(`Failed to unarchive thread: ${msg}`);
+  } finally {
+    clearPendingDiscordSyncField(thread, "archived");
+  }
 }
 
 export async function lockThread(node_id: string | undefined) {
@@ -114,16 +170,29 @@ export async function lockThread(node_id: string | undefined) {
 
   info(Actions.Locked, thread);
 
-  suppressDiscordToGithubSync(thread);
-  thread.locked = true;
-  if (channel.archived) {
-    thread.lockArchiving = true;
-    thread.lockLocking = true;
-    channel.setArchived(false);
-    channel.setLocked(true);
-    channel.setArchived(true);
-  } else {
-    channel.setLocked(true);
+  setPendingDiscordSync(thread, { locked: true });
+  const wasArchived = channel.archived;
+  try {
+    if (wasArchived) {
+      setPendingDiscordSync(thread, { archived: false });
+      await channel.setArchived(false);
+      thread.archived = false;
+    }
+
+    await channel.setLocked(true);
+    thread.locked = true;
+
+    if (wasArchived) {
+      setPendingDiscordSync(thread, { archived: true });
+      await channel.setArchived(true);
+      thread.archived = true;
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown error";
+    logger.error(`Failed to lock thread: ${msg}`);
+  } finally {
+    clearPendingDiscordSyncField(thread, "archived");
+    clearPendingDiscordSyncField(thread, "locked");
   }
 }
 
@@ -133,16 +202,29 @@ export async function unlockThread(node_id: string | undefined) {
 
   info(Actions.Unlocked, thread);
 
-  suppressDiscordToGithubSync(thread);
-  thread.locked = false;
-  if (channel.archived) {
-    thread.lockArchiving = true;
-    thread.lockLocking = true;
-    channel.setArchived(false);
-    channel.setLocked(false);
-    channel.setArchived(true);
-  } else {
-    channel.setLocked(false);
+  setPendingDiscordSync(thread, { locked: false });
+  const wasArchived = channel.archived;
+  try {
+    if (wasArchived) {
+      setPendingDiscordSync(thread, { archived: false });
+      await channel.setArchived(false);
+      thread.archived = false;
+    }
+
+    await channel.setLocked(false);
+    thread.locked = false;
+
+    if (wasArchived) {
+      setPendingDiscordSync(thread, { archived: true });
+      await channel.setArchived(true);
+      thread.archived = true;
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown error";
+    logger.error(`Failed to unlock thread: ${msg}`);
+  } finally {
+    clearPendingDiscordSyncField(thread, "archived");
+    clearPendingDiscordSyncField(thread, "locked");
   }
 }
 
@@ -254,15 +336,15 @@ export async function addClosedStateTag(
     targetId,
   ];
 
-  // Sync in-memory BEFORE the Discord call so the resulting ThreadUpdate
-  // event won't be misread as a user-initiated change in handleThreadUpdate.
-  suppressDiscordToGithubSync(thread);
-  thread.appliedTags = next;
+  setPendingDiscordSync(thread, { appliedTags: next });
   try {
     await channel.setAppliedTags(next);
+    thread.appliedTags = next;
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown error";
     logger.error(`Failed to apply closed-state tag: ${msg}`);
+  } finally {
+    clearPendingDiscordSyncField(thread, "appliedTags");
   }
 }
 
@@ -282,14 +364,15 @@ export async function removeClosedStateTag(node_id: string | undefined) {
   const next = channel.appliedTags.filter((id) => !targetIds.includes(id));
   if (next.length === channel.appliedTags.length) return;
 
-  // See note in addClosedStateTag — suppress reverse-sync via ThreadUpdate.
-  suppressDiscordToGithubSync(thread);
-  thread.appliedTags = next;
+  setPendingDiscordSync(thread, { appliedTags: next });
   try {
     await channel.setAppliedTags(next);
+    thread.appliedTags = next;
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown error";
     logger.error(`Failed to remove closed-state tag: ${msg}`);
+  } finally {
+    clearPendingDiscordSyncField(thread, "appliedTags");
   }
 }
 
@@ -325,14 +408,16 @@ export async function syncIssueLabelTag(
     return;
   }
 
-  suppressDiscordToGithubSync(thread);
-  thread.appliedTags = next;
+  setPendingDiscordSync(thread, { appliedTags: next });
   try {
     await channel.setAppliedTags(next);
+    thread.appliedTags = next;
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown error";
     logger.error(
       `Failed to sync issue label "${labelName}" to Discord tag "${discordTagName}": ${msg}`,
     );
+  } finally {
+    clearPendingDiscordSyncField(thread, "appliedTags");
   }
 }

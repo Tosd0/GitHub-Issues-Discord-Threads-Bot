@@ -4,6 +4,7 @@ import { GithubHandlerFunction } from "../interfaces";
 import { config } from "../config";
 import { logger } from "../logger";
 import { isDiscordBootstrapped } from "../discord/discord";
+import { createSerialQueue } from "../utils/serialQueue";
 import {
   handleClosed,
   handleCreated,
@@ -29,6 +30,8 @@ app.use(
     },
   }),
 );
+
+const enqueueIssueAction = createSerialQueue<string>();
 
 function verifyGithubSignature(
   req: Request,
@@ -105,7 +108,12 @@ export function initGithub() {
     const githubAction = githubActions[action];
     if (githubAction) {
       // Fire-and-forget: ack GitHub fast (<10s) instead of blocking on Discord API.
-      void Promise.resolve(githubAction(req)).catch((err) => {
+      const issueNodeId = req.body?.issue?.node_id;
+      const handler = () => Promise.resolve(githubAction(req));
+      const queued = issueNodeId
+        ? enqueueIssueAction(issueNodeId, handler)
+        : handler();
+      void queued.catch((err) => {
         const msg =
           err instanceof Error ? err.stack || err.message : String(err);
         logger.error(`webhook handler "${action}" failed: ${msg}`);

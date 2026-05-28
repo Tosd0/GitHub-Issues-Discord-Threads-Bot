@@ -10,9 +10,11 @@ interface Thread {
   comments: ThreadComment[];
   archived: boolean | null;
   locked: boolean | null;
-  lockArchiving?: boolean;
-  lockLocking?: boolean;
-  discordToGithubSyncSuppressedUntil?: number;
+  pendingDiscordSync?: {
+    appliedTags?: string[];
+    archived?: boolean;
+    locked?: boolean;
+  };
   subscribers?: string[];
 }
 
@@ -41,6 +43,6 @@ interface GitHubLabel {
 }
 
 // eslint-disable-next-line no-unused-vars
-type GithubHandlerFunction = (req: Request) => void;
+type GithubHandlerFunction = (req: Request) => void | Promise<void>;
 
 export { Thread, ThreadComment, GitIssue, GitHubLabel, GithubHandlerFunction };
