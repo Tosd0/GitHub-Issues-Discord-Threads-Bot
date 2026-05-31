@@ -238,7 +238,7 @@ export async function createIssue(thread: Thread, params: Message) {
 }
 
 export type LinkIssueResult =
-  | { ok: true }
+  | { ok: true; title: string }
   | { ok: false; reason: string; code?: "not_found" | "already_linked" };
 
 export async function linkIssue(
@@ -296,6 +296,7 @@ export async function linkIssue(
   }
 
   thread.number = issueData.number;
+  thread.title = issueData.title;
   thread.node_id = issueData.node_id;
   thread.body = body;
   thread.locked = issueData.locked;
@@ -322,7 +323,7 @@ export async function linkIssue(
   }
 
   info(Actions.Linked, thread);
-  return { ok: true };
+  return { ok: true, title: issueData.title };
 }
 
 export type UnlinkIssueResult = { ok: true } | { ok: false; reason: string };

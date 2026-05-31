@@ -149,6 +149,18 @@ export async function handleClientReady(client: Client) {
           type: ApplicationCommandType.ChatInput,
           dmPermission: false,
         },
+        {
+          name: "complete",
+          description: "Close this post as completed. (Admin only)",
+          type: ApplicationCommandType.ChatInput,
+          dmPermission: false,
+        },
+        {
+          name: "invalid",
+          description: "Close this post as not planned / invalid. (Admin only)",
+          type: ApplicationCommandType.ChatInput,
+          dmPermission: false,
+        },
       ]);
       logger.info(`Slash commands registered in guild ${guild.name}.`);
     } catch (err) {
@@ -351,6 +363,10 @@ export async function handleInteractionCreate(interaction: Interaction) {
       return handleLinkIssueCommand(interaction);
     case "unlink-issue":
       return handleUnlinkIssueCommand(interaction);
+    case "complete":
+      return handleCompleteCommand(interaction);
+    case "invalid":
+      return handleInvalidCommand(interaction);
   }
 }
 
@@ -648,8 +664,12 @@ async function handleLinkIssueCommand(
     }
 
     starter.react("👀").catch(() => undefined);
+    const issueLink = `[#${thread.number}](<${issueUrl(thread.number!)}>)`;
     await interaction.editReply({
-      content: `Linked to issue [#${thread.number}](<${issueUrl(thread.number!)}>) by <@${interaction.user.id}>.`,
+      content: [
+        `Linked to issue ${issueLink} by <@${interaction.user.id}>.`,
+        result.title,
+      ].join("\n"),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.stack || err.message : String(err);
@@ -782,4 +802,85 @@ async function handleSyncToIssueCommand(
       content: "Failed to sync the message. Please check the logs.",
     });
   }
+}
+
+async function handleCloseCommand(
+  interaction: ChatInputCommandInteraction,
+  reason: ClosedReason,
+) {
+  try {
+    if (!memberIsAdmin(interaction)) {
+      await interaction.reply({
+        content: "You don't have permission to use this command.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const channel = await ensureForumThread(interaction);
+    if (!channel) return;
+
+    await interaction.deferReply();
+
+    const forum = channel.parent;
+    if (!(forum instanceof ForumChannel)) {
+      await interaction.editReply({ content: "This is not a forum channel." });
+      return;
+    }
+
+    const closedIds = getClosedStateTagIds(forum);
+    const targetId =
+      reason === "completed" ? closedIds.completed : closedIds.not_planned;
+    const otherId =
+      reason === "completed" ? closedIds.not_planned : closedIds.completed;
+
+    if (!targetId) {
+      await interaction.editReply({
+        content: `The "${reason}" tag is not configured in this forum.`,
+      });
+      return;
+    }
+
+    const otherTags = channel.appliedTags.filter(
+      (id) => id !== targetId && id !== otherId,
+    );
+    if (otherTags.length >= 5) {
+      await interaction.editReply({
+        content:
+          "This post already has 5 tags. Remove one tag before closing it.",
+      });
+      return;
+    }
+
+    const nextTags = [...otherTags, targetId];
+
+    await channel.edit({ appliedTags: nextTags, archived: true });
+
+    await interaction.editReply({
+      content: `Marked as ${reason === "completed" ? "completed" : "invalid/not planned"} and closed.`,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.stack || err.message : String(err);
+    logger.error(
+      `/${reason === "completed" ? "complete" : "invalid"} handler failed: ${msg}`,
+    );
+    const fallback = "Something went wrong while running the command.";
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({ content: fallback });
+      } else {
+        await interaction.reply({ content: fallback, ephemeral: true });
+      }
+    } catch {
+      /* interaction may already be expired */
+    }
+  }
+}
+
+async function handleCompleteCommand(interaction: ChatInputCommandInteraction) {
+  return handleCloseCommand(interaction, "completed");
+}
+
+async function handleInvalidCommand(interaction: ChatInputCommandInteraction) {
+  return handleCloseCommand(interaction, "not_planned");
 }
