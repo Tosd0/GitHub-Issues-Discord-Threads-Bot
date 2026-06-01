@@ -128,42 +128,6 @@ export async function createComment({
     .catch(console.error);
 }
 
-export async function archiveThread(node_id: string | undefined) {
-  const { thread, channel } = await getThreadChannel(node_id);
-  if (!thread || !channel || channel.archived) return;
-
-  info(Actions.Closed, thread);
-
-  setPendingDiscordSync(thread, { archived: true });
-  try {
-    await channel.setArchived(true);
-    thread.archived = true;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "unknown error";
-    logger.error(`Failed to archive thread: ${msg}`);
-  } finally {
-    clearPendingDiscordSyncField(thread, "archived");
-  }
-}
-
-export async function unarchiveThread(node_id: string | undefined) {
-  const { thread, channel } = await getThreadChannel(node_id);
-  if (!thread || !channel || !channel.archived) return;
-
-  info(Actions.Reopened, thread);
-
-  setPendingDiscordSync(thread, { archived: false });
-  try {
-    await channel.setArchived(false);
-    thread.archived = false;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "unknown error";
-    logger.error(`Failed to unarchive thread: ${msg}`);
-  } finally {
-    clearPendingDiscordSyncField(thread, "archived");
-  }
-}
-
 export async function lockThread(node_id: string | undefined) {
   const { thread, channel } = await getThreadChannel(node_id);
   if (!thread || !channel || channel.locked) return;
@@ -340,6 +304,7 @@ export async function addClosedStateTag(
   try {
     await channel.setAppliedTags(next);
     thread.appliedTags = next;
+    info(Actions.Closed, thread);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown error";
     logger.error(`Failed to apply closed-state tag: ${msg}`);
@@ -368,6 +333,7 @@ export async function removeClosedStateTag(node_id: string | undefined) {
   try {
     await channel.setAppliedTags(next);
     thread.appliedTags = next;
+    info(Actions.Reopened, thread);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown error";
     logger.error(`Failed to remove closed-state tag: ${msg}`);

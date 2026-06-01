@@ -75,8 +75,14 @@ events, so selecting the GitHub webhook "Issues" event category is enough.
 
 #### Open/Close Management
 
-- \[x] Discord Post Open/Close -> Triggers opening or closing of related GitHub issues.
-- \[x] GitHub Issue Open/Close -> Update Discord post status based on GitHub issue status.
+Issue open/close state is mirrored through the `closedState` tags above, **not**
+through the archived/active state of the Discord post. Closing a GitHub issue
+applies the matching closed-state tag to the post (the post is _not_ archived);
+reopening removes it. This avoids a pitfall where a forum post auto-unarchives
+as soon as anyone posts a message, which used to be synced back as a reopen.
+
+- \[x] Discord Post Tag -> Adding/removing the closed-state tag closes/reopens the linked GitHub issue.
+- \[x] GitHub Issue Open/Close -> Applies/removes the closed-state tag on the Discord post.
 
 #### Deletion Actions
 

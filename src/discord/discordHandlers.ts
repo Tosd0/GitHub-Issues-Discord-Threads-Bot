@@ -258,7 +258,10 @@ async function syncAppliedTagsToGithub(
 
   if (addedReason) {
     await closeIssue(thread, addedReason);
-  } else if (removedClosedTag && params.members.thread.archived) {
+  } else if (removedClosedTag) {
+    // Removing the closed-state tag is the one and only way to reopen from
+    // Discord. We no longer gate this on the thread being archived, since
+    // closing an issue no longer archives the thread.
     await openIssue(thread);
   }
 }
@@ -289,9 +292,14 @@ export async function handleThreadUpdate(params: AnyThreadChannel) {
     thread.locked = locked;
     locked ? await lockIssue(thread) : await unlockIssue(thread);
   }
+  // Archive state is NO LONGER synced to GitHub issue state. A Discord forum
+  // thread auto-unarchives whenever a message is posted to it, so treating
+  // "unarchived" as "reopen" caused the issue to be reopened the moment anyone
+  // replied in a resolved post. Issue open/close is driven solely by the
+  // closed-state tag (see syncAppliedTagsToGithub). We keep the in-memory flag
+  // up to date for bookkeeping only.
   if (!pending.archived && thread.archived !== archived) {
     thread.archived = archived;
-    archived ? await closeIssue(thread) : await openIssue(thread);
   }
 }
 
@@ -854,10 +862,12 @@ async function handleCloseCommand(
 
     const nextTags = [...otherTags, targetId];
 
-    await channel.edit({ appliedTags: nextTags, archived: true });
+    // Apply the closed-state tag only; the tag drives the GitHub close. We do
+    // not archive the thread (archiving is no longer tied to issue state).
+    await channel.edit({ appliedTags: nextTags });
 
     await interaction.editReply({
-      content: `Marked as ${reason === "completed" ? "completed" : "invalid/not planned"} and closed.`,
+      content: `Marked as ${reason === "completed" ? "completed" : "invalid/not planned"} and closed the issue.`,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.stack || err.message : String(err);

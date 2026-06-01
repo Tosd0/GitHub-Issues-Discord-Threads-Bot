@@ -1,7 +1,6 @@
 import { Request } from "express";
 import {
   addClosedStateTag,
-  archiveThread,
   createComment,
   deleteThread,
   lockThread,
@@ -9,7 +8,6 @@ import {
   reactToThreadStarter,
   removeClosedStateTag,
   syncIssueLabelTag,
-  unarchiveThread,
   unlockThread,
 } from "../discord/discordActions";
 import { ClosedReason } from "../tagMapping";
@@ -47,10 +45,10 @@ export async function handleClosed(req: Request) {
   const reason: ClosedReason =
     state_reason === "not_planned" ? "not_planned" : "completed";
 
-  // Apply the state tag first while the thread is still un-archived; setting
-  // applied tags on an archived thread is fiddly.
+  // The closed-state tag is the single source of truth for issue state; we do
+  // NOT archive the thread. A forum thread auto-unarchives on any new message,
+  // and syncing that unarchive back to GitHub used to reopen the issue.
   await addClosedStateTag(node_id, reason);
-  await archiveThread(node_id);
   await reactToThreadStarter(
     node_id,
     state_reason === "not_planned" ? "❌" : "✅",
@@ -67,7 +65,6 @@ export async function handleReopened(req: Request) {
   if (!req.body?.issue) return;
 
   const node_id = getIssueNodeId(req);
-  await unarchiveThread(node_id);
   await removeClosedStateTag(node_id);
 
   const { number, title, html_url } = req.body.issue;
