@@ -37,6 +37,7 @@ export const Actions = {
   Deleted: "deleted",
   DeletedComment: "deleted comment",
   Labeled: "labeled",
+  Unlabeled: "unlabeled",
   Linked: "linked",
 } as const;
 

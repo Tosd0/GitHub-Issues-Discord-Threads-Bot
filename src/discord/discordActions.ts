@@ -9,11 +9,15 @@ import {
 } from "../logger";
 import { store } from "../store";
 import {
+  CLOSED_REASONS,
   ClosedReason,
+  getClearOnCloseDiscordTagNames,
   getDiscordTagNameForGithubLabel,
+  getGithubLabelNameForDiscordTag,
   isClosedStateDiscordTagName,
   tagMapping,
 } from "../tagMapping";
+import { removeLabelsFromIssue } from "../github/githubActions";
 import { areTagSetsEqual } from "../utils/tagSets";
 import client from "./discord";
 
@@ -77,16 +81,45 @@ export function resolvePendingDiscordSync(
   return handled;
 }
 
-export function getClosedStateTagIds(forum: ForumChannel): {
-  completed?: string;
-  not_planned?: string;
-} {
+export function getClosedStateTagIds(
+  forum: ForumChannel,
+): Record<ClosedReason, string | undefined> {
   const find = (name: string) =>
     name ? forum.availableTags.find((t) => t.name === name)?.id : undefined;
-  return {
-    completed: find(tagMapping.closedState.completed),
-    not_planned: find(tagMapping.closedState.not_planned),
-  };
+  const ids = {} as Record<ClosedReason, string | undefined>;
+  for (const reason of CLOSED_REASONS) {
+    ids[reason] = find(tagMapping.closedState[reason]);
+  }
+  return ids;
+}
+
+/** Tag ids on this forum that belong to a `clearOnClose` group. */
+export function getClearOnCloseTagIds(forum: ForumChannel): string[] {
+  const names = new Set(getClearOnCloseDiscordTagNames());
+  if (names.size === 0) return [];
+  return forum.availableTags
+    .filter((tag) => names.has(tag.name))
+    .map((tag) => tag.id);
+}
+
+/**
+ * Remove the GitHub labels mirroring the given Discord tag ids (used when
+ * clear-on-close tags are stripped from a post). No-op for unlinked posts.
+ */
+export async function removeGithubLabelsForTagIds(
+  thread: Thread,
+  forum: ForumChannel,
+  tagIds: string[],
+): Promise<void> {
+  if (!thread.number || tagIds.length === 0) return;
+
+  const labels = tagIds
+    .map((id) => forum.availableTags.find((tag) => tag.id === id)?.name)
+    .filter((name): name is string => Boolean(name))
+    .map((name) => getGithubLabelNameForDiscordTag(name))
+    .filter((label): label is string => Boolean(label));
+
+  if (labels.length) await removeLabelsFromIssue(thread, labels);
 }
 
 const info = (action: ActionValue, thread: Thread) =>
@@ -291,12 +324,24 @@ export async function addClosedStateTag(
     );
     return;
   }
-  if (channel.appliedTags.includes(targetId)) return;
 
-  // Closed state is mutually exclusive on GitHub; mirror that on Discord.
-  const otherId = reason === "completed" ? ids.not_planned : ids.completed;
+  // Closed state is mutually exclusive; only one closed-state tag at a time.
+  const closedIds = Object.values(ids).filter(
+    (id): id is string => Boolean(id),
+  );
+  // Closing a post clears any in-progress (clear-on-close) tags on both sides.
+  const clearIds = getClearOnCloseTagIds(forum);
+  const removedClearTags = channel.appliedTags.filter((id) =>
+    clearIds.includes(id),
+  );
+
+  const alreadyTagged = channel.appliedTags.includes(targetId);
+  if (alreadyTagged && removedClearTags.length === 0) return;
+
   const next = [
-    ...channel.appliedTags.filter((id) => id !== otherId),
+    ...channel.appliedTags.filter(
+      (id) => !closedIds.includes(id) && !clearIds.includes(id),
+    ),
     targetId,
   ];
 
@@ -311,6 +356,8 @@ export async function addClosedStateTag(
   } finally {
     clearPendingDiscordSyncField(thread, "appliedTags");
   }
+
+  await removeGithubLabelsForTagIds(thread, forum, removedClearTags);
 }
 
 export async function removeClosedStateTag(node_id: string | undefined) {
@@ -321,7 +368,7 @@ export async function removeClosedStateTag(node_id: string | undefined) {
   if (!(forum instanceof ForumChannel)) return;
 
   const ids = getClosedStateTagIds(forum);
-  const targetIds = [ids.completed, ids.not_planned].filter(
+  const targetIds = Object.values(ids).filter(
     (id): id is string => Boolean(id),
   );
   if (targetIds.length === 0) return;

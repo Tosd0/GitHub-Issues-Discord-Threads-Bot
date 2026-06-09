@@ -17,7 +17,9 @@ import {
 } from "discord.js";
 import { config } from "../config";
 import {
+  getClearOnCloseTagIds,
   getClosedStateTagIds,
+  removeGithubLabelsForTagIds,
   resolvePendingDiscordSync,
 } from "./discordActions";
 import {
@@ -161,6 +163,12 @@ export async function handleClientReady(client: Client) {
           type: ApplicationCommandType.ChatInput,
           dmPermission: false,
         },
+        {
+          name: "duplicate",
+          description: "Close this post as a duplicate. (Admin only)",
+          type: ApplicationCommandType.ChatInput,
+          dmPermission: false,
+        },
       ]);
       logger.info(`Slash commands registered in guild ${guild.name}.`);
     } catch (err) {
@@ -223,14 +231,15 @@ async function syncAppliedTagsToGithub(
   const closedIds =
     forum instanceof ForumChannel
       ? getClosedStateTagIds(forum)
-      : { completed: undefined, not_planned: undefined };
+      : ({} as Record<ClosedReason, string | undefined>);
   const prevSet = new Set(prev);
   const nextSet = new Set(next);
 
   const reasonFor = (tagId: string | undefined): ClosedReason | null => {
     if (!tagId) return null;
-    if (tagId === closedIds.completed) return "completed";
-    if (tagId === closedIds.not_planned) return "not_planned";
+    for (const [reason, id] of Object.entries(closedIds)) {
+      if (id && id === tagId) return reason as ClosedReason;
+    }
     return null;
   };
 
@@ -375,6 +384,8 @@ export async function handleInteractionCreate(interaction: Interaction) {
       return handleCompleteCommand(interaction);
     case "invalid":
       return handleInvalidCommand(interaction);
+    case "duplicate":
+      return handleDuplicateCommand(interaction);
   }
 }
 
@@ -812,10 +823,20 @@ async function handleSyncToIssueCommand(
   }
 }
 
+const CLOSE_REASON_META: Record<
+  ClosedReason,
+  { command: string; label: string }
+> = {
+  completed: { command: "complete", label: "completed" },
+  not_planned: { command: "invalid", label: "invalid / not planned" },
+  duplicate: { command: "duplicate", label: "a duplicate" },
+};
+
 async function handleCloseCommand(
   interaction: ChatInputCommandInteraction,
   reason: ClosedReason,
 ) {
+  const meta = CLOSE_REASON_META[reason];
   try {
     if (!memberIsAdmin(interaction)) {
       await interaction.reply({
@@ -837,10 +858,7 @@ async function handleCloseCommand(
     }
 
     const closedIds = getClosedStateTagIds(forum);
-    const targetId =
-      reason === "completed" ? closedIds.completed : closedIds.not_planned;
-    const otherId =
-      reason === "completed" ? closedIds.not_planned : closedIds.completed;
+    const targetId = closedIds[reason];
 
     if (!targetId) {
       await interaction.editReply({
@@ -849,8 +867,18 @@ async function handleCloseCommand(
       return;
     }
 
+    // Drop every other closed-state tag (they are mutually exclusive) and any
+    // in-progress (clear-on-close) tag, then apply the target closed-state tag.
+    const allClosedIds = Object.values(closedIds).filter(
+      (id): id is string => Boolean(id),
+    );
+    const clearIds = getClearOnCloseTagIds(forum);
+    const removedClearTags = channel.appliedTags.filter((id) =>
+      clearIds.includes(id),
+    );
+
     const otherTags = channel.appliedTags.filter(
-      (id) => id !== targetId && id !== otherId,
+      (id) => !allClosedIds.includes(id) && !clearIds.includes(id),
     );
     if (otherTags.length >= 5) {
       await interaction.editReply({
@@ -866,14 +894,19 @@ async function handleCloseCommand(
     // not archive the thread (archiving is no longer tied to issue state).
     await channel.edit({ appliedTags: nextTags });
 
+    // The Discord tag change does not push label removals to GitHub on its
+    // own, so mirror the cleared in-progress tags by removing their labels.
+    const thread = store.threads.find((t) => t.id === channel.id);
+    if (thread) {
+      await removeGithubLabelsForTagIds(thread, forum, removedClearTags);
+    }
+
     await interaction.editReply({
-      content: `Marked as ${reason === "completed" ? "completed" : "invalid/not planned"} and closed the issue.`,
+      content: `Marked as ${meta.label} and closed the issue.`,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.stack || err.message : String(err);
-    logger.error(
-      `/${reason === "completed" ? "complete" : "invalid"} handler failed: ${msg}`,
-    );
+    logger.error(`/${meta.command} handler failed: ${msg}`);
     const fallback = "Something went wrong while running the command.";
     try {
       if (interaction.deferred || interaction.replied) {
@@ -893,4 +926,10 @@ async function handleCompleteCommand(interaction: ChatInputCommandInteraction) {
 
 async function handleInvalidCommand(interaction: ChatInputCommandInteraction) {
   return handleCloseCommand(interaction, "not_planned");
+}
+
+async function handleDuplicateCommand(
+  interaction: ChatInputCommandInteraction,
+) {
+  return handleCloseCommand(interaction, "duplicate");
 }

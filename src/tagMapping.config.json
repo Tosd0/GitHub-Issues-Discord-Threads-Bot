@@ -1,7 +1,18 @@
 {
   "closedState": {
     "completed": "已解决",
-    "not_planned": "无效"
+    "not_planned": "无效",
+    "duplicate": "重复"
   },
-  "labels": []
+  "closedStateGithubLabels": {
+    "duplicate": "duplicate"
+  },
+  "labels": [],
+  "tagGroups": [
+    {
+      "name": "in-progress",
+      "clearOnClose": true,
+      "tags": []
+    }
+  ]
 }
