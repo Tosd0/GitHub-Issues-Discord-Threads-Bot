@@ -17,7 +17,9 @@ import {
 } from "discord.js";
 import { config } from "../config";
 import {
+  getClearOnCloseTagIds,
   getClosedStateTagIds,
+  removeGithubLabelsForTagIds,
   resolvePendingDiscordSync,
 } from "./discordActions";
 import {
@@ -37,7 +39,12 @@ import {
 } from "../github/githubActions";
 import { logger } from "../logger";
 import { store } from "../store";
-import { ClosedReason } from "../tagMapping";
+import {
+  ClosedReason,
+  getClosedReasonByCommandName,
+  getClosedReasonCommands,
+  getClosedReasonLabel,
+} from "../tagMapping";
 import { areTagSetsEqual } from "../utils/tagSets";
 import { Thread } from "../interfaces";
 
@@ -149,18 +156,14 @@ export async function handleClientReady(client: Client) {
           type: ApplicationCommandType.ChatInput,
           dmPermission: false,
         },
-        {
-          name: "complete",
-          description: "Close this post as completed. (Admin only)",
+        // Close commands are config-driven (see closedStateCommands in
+        // tagMapping.config.json); one slash command per closed-state reason.
+        ...getClosedReasonCommands().map((c) => ({
+          name: c.command,
+          description: c.description,
           type: ApplicationCommandType.ChatInput,
           dmPermission: false,
-        },
-        {
-          name: "invalid",
-          description: "Close this post as not planned / invalid. (Admin only)",
-          type: ApplicationCommandType.ChatInput,
-          dmPermission: false,
-        },
+        })),
       ]);
       logger.info(`Slash commands registered in guild ${guild.name}.`);
     } catch (err) {
@@ -223,14 +226,15 @@ async function syncAppliedTagsToGithub(
   const closedIds =
     forum instanceof ForumChannel
       ? getClosedStateTagIds(forum)
-      : { completed: undefined, not_planned: undefined };
+      : ({} as Record<ClosedReason, string | undefined>);
   const prevSet = new Set(prev);
   const nextSet = new Set(next);
 
   const reasonFor = (tagId: string | undefined): ClosedReason | null => {
     if (!tagId) return null;
-    if (tagId === closedIds.completed) return "completed";
-    if (tagId === closedIds.not_planned) return "not_planned";
+    for (const [reason, id] of Object.entries(closedIds)) {
+      if (id && id === tagId) return reason as ClosedReason;
+    }
     return null;
   };
 
@@ -371,10 +375,13 @@ export async function handleInteractionCreate(interaction: Interaction) {
       return handleLinkIssueCommand(interaction);
     case "unlink-issue":
       return handleUnlinkIssueCommand(interaction);
-    case "complete":
-      return handleCompleteCommand(interaction);
-    case "invalid":
-      return handleInvalidCommand(interaction);
+  }
+
+  // Close commands are config-driven; dispatch by matching the command name
+  // against the configured closed-state reasons.
+  const closeReason = getClosedReasonByCommandName(interaction.commandName);
+  if (closeReason !== undefined) {
+    return handleCloseCommand(interaction, closeReason);
   }
 }
 
@@ -837,10 +844,7 @@ async function handleCloseCommand(
     }
 
     const closedIds = getClosedStateTagIds(forum);
-    const targetId =
-      reason === "completed" ? closedIds.completed : closedIds.not_planned;
-    const otherId =
-      reason === "completed" ? closedIds.not_planned : closedIds.completed;
+    const targetId = closedIds[reason];
 
     if (!targetId) {
       await interaction.editReply({
@@ -849,8 +853,18 @@ async function handleCloseCommand(
       return;
     }
 
+    // Drop every other closed-state tag (they are mutually exclusive) and any
+    // in-progress (clear-on-close) tag, then apply the target closed-state tag.
+    const allClosedIds = Object.values(closedIds).filter(
+      (id): id is string => Boolean(id),
+    );
+    const clearIds = getClearOnCloseTagIds(forum);
+    const removedClearTags = channel.appliedTags.filter((id) =>
+      clearIds.includes(id),
+    );
+
     const otherTags = channel.appliedTags.filter(
-      (id) => id !== targetId && id !== otherId,
+      (id) => !allClosedIds.includes(id) && !clearIds.includes(id),
     );
     if (otherTags.length >= 5) {
       await interaction.editReply({
@@ -866,14 +880,19 @@ async function handleCloseCommand(
     // not archive the thread (archiving is no longer tied to issue state).
     await channel.edit({ appliedTags: nextTags });
 
+    // The Discord tag change does not push label removals to GitHub on its
+    // own, so mirror the cleared in-progress tags by removing their labels.
+    const thread = store.threads.find((t) => t.id === channel.id);
+    if (thread) {
+      await removeGithubLabelsForTagIds(thread, forum, removedClearTags);
+    }
+
     await interaction.editReply({
-      content: `Marked as ${reason === "completed" ? "completed" : "invalid/not planned"} and closed the issue.`,
+      content: `Marked as ${getClosedReasonLabel(reason)} and closed the issue.`,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.stack || err.message : String(err);
-    logger.error(
-      `/${reason === "completed" ? "complete" : "invalid"} handler failed: ${msg}`,
-    );
+    logger.error(`close command (${reason}) handler failed: ${msg}`);
     const fallback = "Something went wrong while running the command.";
     try {
       if (interaction.deferred || interaction.replied) {
@@ -885,12 +904,4 @@ async function handleCloseCommand(
       /* interaction may already be expired */
     }
   }
-}
-
-async function handleCompleteCommand(interaction: ChatInputCommandInteraction) {
-  return handleCloseCommand(interaction, "completed");
-}
-
-async function handleInvalidCommand(interaction: ChatInputCommandInteraction) {
-  return handleCloseCommand(interaction, "not_planned");
 }

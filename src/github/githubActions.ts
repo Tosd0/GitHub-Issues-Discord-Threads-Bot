@@ -11,7 +11,13 @@ import {
   logger,
 } from "../logger";
 import { store } from "../store";
-import { ClosedReason, getGithubLabelNameForDiscordTag } from "../tagMapping";
+import {
+  ClosedReason,
+  getAllClosedStateGithubLabels,
+  getClosedStateGithubLabel,
+  getGithubLabelNameForDiscordTag,
+  getGithubStateReason,
+} from "../tagMapping";
 
 export const octokit = new Octokit({
   auth: config.GITHUB_ACCESS_TOKEN,
@@ -105,7 +111,7 @@ function formatIssuesToThreads(issues: GitIssue[]): Thread[] {
 async function update(
   issue_number: number,
   state: "open" | "closed",
-  state_reason?: ClosedReason,
+  state_reason?: "completed" | "not_planned",
 ) {
   try {
     await octokit.rest.issues.update({
@@ -120,7 +126,7 @@ async function update(
   }
 }
 
-export async function closeIssue(thread: Thread, state_reason?: ClosedReason) {
+export async function closeIssue(thread: Thread, reason?: ClosedReason) {
   const { number: issue_number } = thread;
 
   if (!issue_number) {
@@ -128,9 +134,46 @@ export async function closeIssue(thread: Thread, state_reason?: ClosedReason) {
     return;
   }
 
+  // GitHub cannot record reasons like "duplicate" natively, so mirror them
+  // with an extra label. Apply it BEFORE closing so the "closed" webhook
+  // payload already carries the label and the GitHub→Discord round trip keeps
+  // the correct closed-state tag instead of overwriting it.
+  const extraLabel = reason ? getClosedStateGithubLabel(reason) : undefined;
+
+  // Drop any mirror label left over from a previous close reason (keeping the
+  // one we are about to apply). Otherwise switching reason, e.g. /duplicate →
+  // /invalid, leaves the "duplicate" label behind and a later "not_planned"
+  // webhook gets misread back into "duplicate".
+  const staleLabels = getAllClosedStateGithubLabels().filter(
+    (label) => label !== extraLabel,
+  );
+  if (staleLabels.length) await removeLabelsFromIssue(thread, staleLabels);
+
+  if (extraLabel) {
+    // The mirror label is the only thing that distinguishes this reason from a
+    // plain "not_planned" close. If it can't be applied, abort instead of
+    // closing — otherwise e.g. /duplicate silently degrades into /invalid.
+    const labelApplied = await addLabelsToIssue(thread, [extraLabel]);
+    if (!labelApplied) {
+      error(
+        `Aborting close: failed to apply "${extraLabel}" mirror label for reason "${reason}"`,
+        thread,
+      );
+      return;
+    }
+  }
+
+  const state_reason = reason ? getGithubStateReason(reason) : undefined;
   const response = await update(issue_number, "closed", state_reason);
-  if (response === true) info(Actions.Closed, thread);
-  else if (response instanceof Error)
+  if (response === true) {
+    info(Actions.Closed, thread);
+    return;
+  }
+
+  // The close failed after the mirror label was applied; roll it back so the
+  // still-open issue isn't left carrying a stale closed-state label.
+  if (extraLabel) await removeLabelsFromIssue(thread, [extraLabel]);
+  if (response instanceof Error)
     error(`Failed to close issue: ${response.message}`, thread);
   else error("Failed to close issue due to an unknown error", thread);
 }
@@ -144,8 +187,12 @@ export async function openIssue(thread: Thread) {
   }
 
   const response = await update(issue_number, "open");
-  if (response === true) info(Actions.Reopened, thread);
-  else if (response instanceof Error)
+  if (response === true) {
+    info(Actions.Reopened, thread);
+    // Drop any closed-state mirror labels (e.g. "duplicate") on reopen.
+    const labels = getAllClosedStateGithubLabels();
+    if (labels.length) await removeLabelsFromIssue(thread, labels);
+  } else if (response instanceof Error)
     error(`Failed to open issue: ${response.message}`, thread);
   else error("Failed to open issue due to an unknown error", thread);
 }
@@ -433,6 +480,34 @@ export async function addLabelsToIssue(
       error("Failed to add labels due to an unknown error", thread);
     }
     return false;
+  }
+}
+
+export async function removeLabelsFromIssue(
+  thread: Thread,
+  labels: string[],
+): Promise<void> {
+  const { number: issue_number } = thread;
+  if (!issue_number) {
+    error("Thread does not have an issue number", thread);
+    return;
+  }
+
+  for (const name of labels) {
+    try {
+      await octokit.rest.issues.removeLabel({
+        ...repoCredentials,
+        issue_number,
+        name,
+      });
+      info(Actions.Unlabeled, thread);
+    } catch (err) {
+      // A label that isn't applied to the issue returns 404; that's fine.
+      const status = (err as { status?: number })?.status;
+      if (status === 404) continue;
+      const message = err instanceof Error ? err.message : "unknown error";
+      error(`Failed to remove label "${name}": ${message}`, thread);
+    }
   }
 }
 

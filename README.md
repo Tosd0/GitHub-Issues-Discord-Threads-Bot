@@ -40,11 +40,23 @@ Tag mappings live in `src/tagMapping.config.json`:
 {
   "closedState": {
     "completed": "已解决",
-    "not_planned": "无效"
+    "not_planned": "无效",
+    "duplicate": "重复"
+  },
+  "closedStateGithubLabels": {
+    "duplicate": "duplicate"
+  },
+  "closedStateCommands": {
+    "completed": { "command": "complete", "description": "Close this post as completed. (Admin only)", "label": "completed" },
+    "not_planned": { "command": "invalid", "description": "Close this post as not planned / invalid. (Admin only)", "label": "invalid / not planned" },
+    "duplicate": { "command": "duplicate", "description": "Close this post as a duplicate. (Admin only)", "label": "a duplicate" }
   },
   "labels": [
     { "github": "bug", "discord": "Bug" },
     { "github": "enhancement", "discord": "功能" }
+  ],
+  "tagGroups": [
+    { "name": "in-progress", "clearOnClose": true, "tags": ["进行中", "待审核"] }
   ]
 }
 ```
@@ -56,8 +68,36 @@ Discord forum tag with the same name.
 
 - `completed` is applied when GitHub closes an issue as completed.
 - `not_planned` is applied when GitHub closes an issue as not planned.
+- `duplicate` is applied when a post is closed as a duplicate.
 - Adding one of these Discord tags closes the linked GitHub issue.
 - Removing one of these Discord tags from a closed post reopens the issue.
+
+GitHub's API only records `completed` or `not_planned` as a close reason. Any
+other reason (such as `duplicate`) is closed as `not_planned` on GitHub and
+distinguished there by an extra label configured in `closedStateGithubLabels`
+(here, the `duplicate` label). The label is applied on close and removed on
+reopen; a `not_planned` close that carries this label is mapped back to the
+`duplicate` Discord tag.
+
+`closedStateCommands` defines the admin-only slash command for each reason: the
+command name, its Discord description, and the phrase used in the bot's
+confirmation reply.
+
+**Adding a closed-state reason is config-only — no code change needed.** Add a
+matching key to `closedState` (the Discord tag) and `closedStateCommands` (the
+slash command); for any reason other than `completed`/`not_planned`, also add a
+`closedStateGithubLabels` entry (the GitHub mirror label). `completed` and
+`not_planned` are reserved names that map to GitHub's two native close reasons —
+every other reason is recorded on GitHub as `not_planned` plus its mirror label.
+
+`tagGroups` lets you group Discord forum tags. A group flagged
+`clearOnClose: true` has all of its tags removed from a post whenever it is
+closed (via `/complete`, `/invalid`, `/duplicate`, or a GitHub-side close), and
+the matching GitHub labels are removed too. Use this for "in progress"-style
+tags that should not linger on a resolved post. List the exact Discord tag
+names in `tags` (leave the array empty to disable). State is **not** preserved:
+reopening a post does not restore previously cleared tags — re-apply them
+manually if needed.
 
 `labels` is for normal GitHub label <-> Discord forum tag mapping. Put entries
 there when the names differ. Example: `{ "github": "enhancement", "discord": "功能" }`
@@ -83,6 +123,10 @@ as soon as anyone posts a message, which used to be synced back as a reopen.
 
 - \[x] Discord Post Tag -> Adding/removing the closed-state tag closes/reopens the linked GitHub issue.
 - \[x] GitHub Issue Open/Close -> Applies/removes the closed-state tag on the Discord post.
+- \[x] Close commands -> Admin-only `/complete`, `/invalid`, and `/duplicate`
+  slash commands close the post (and its issue) with the matching closed-state
+  tag. They also clear any `clearOnClose` tag group (see Tags & Labels) from
+  both Discord and GitHub.
 
 #### Deletion Actions
 

@@ -1,7 +1,35 @@
 {
   "closedState": {
     "completed": "已解决",
-    "not_planned": "无效"
+    "not_planned": "无效",
+    "duplicate": "重复"
   },
-  "labels": []
+  "closedStateGithubLabels": {
+    "duplicate": "duplicate"
+  },
+  "closedStateCommands": {
+    "completed": {
+      "command": "complete",
+      "description": "Close this post as completed. (Admin only)",
+      "label": "completed"
+    },
+    "not_planned": {
+      "command": "invalid",
+      "description": "Close this post as not planned / invalid. (Admin only)",
+      "label": "invalid / not planned"
+    },
+    "duplicate": {
+      "command": "duplicate",
+      "description": "Close this post as a duplicate. (Admin only)",
+      "label": "a duplicate"
+    }
+  },
+  "labels": [],
+  "tagGroups": [
+    {
+      "name": "in-progress",
+      "clearOnClose": true,
+      "tags": []
+    }
+  ]
 }

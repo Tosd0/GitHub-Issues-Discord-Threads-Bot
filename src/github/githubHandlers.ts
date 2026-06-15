@@ -10,7 +10,7 @@ import {
   syncIssueLabelTag,
   unlockThread,
 } from "../discord/discordActions";
-import { ClosedReason } from "../tagMapping";
+import { ClosedReason, getClosedReasonFromGithubLabels } from "../tagMapping";
 import { getDiscordInfoFromGithubBody } from "./githubActions";
 
 function getIssueNodeId(req: Request): string | undefined {
@@ -41,9 +41,19 @@ export async function handleClosed(req: Request) {
   if (!req.body?.issue) return;
 
   const node_id = getIssueNodeId(req);
-  const { number, title, html_url, state_reason } = req.body.issue;
+  const { number, title, html_url, state_reason, labels } = req.body.issue;
+  // GitHub records only "completed"/"not_planned". A "not_planned" close maps
+  // back to a custom reason (e.g. "duplicate") when that reason's mirror label
+  // is present on the issue.
+  const labelNames: string[] = Array.isArray(labels)
+    ? labels
+        .map((label: { name?: string }) => label?.name)
+        .filter((name: string | undefined): name is string => Boolean(name))
+    : [];
   const reason: ClosedReason =
-    state_reason === "not_planned" ? "not_planned" : "completed";
+    state_reason === "not_planned"
+      ? getClosedReasonFromGithubLabels(labelNames) ?? "not_planned"
+      : "completed";
 
   // The closed-state tag is the single source of truth for issue state; we do
   // NOT archive the thread. A forum thread auto-unarchives on any new message,
