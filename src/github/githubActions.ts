@@ -139,12 +139,41 @@ export async function closeIssue(thread: Thread, reason?: ClosedReason) {
   // payload already carries the label and the GitHub→Discord round trip keeps
   // the correct closed-state tag instead of overwriting it.
   const extraLabel = reason ? getClosedStateGithubLabel(reason) : undefined;
-  if (extraLabel) await addLabelsToIssue(thread, [extraLabel]);
+
+  // Drop any mirror label left over from a previous close reason (keeping the
+  // one we are about to apply). Otherwise switching reason, e.g. /duplicate →
+  // /invalid, leaves the "duplicate" label behind and a later "not_planned"
+  // webhook gets misread back into "duplicate".
+  const staleLabels = getAllClosedStateGithubLabels().filter(
+    (label) => label !== extraLabel,
+  );
+  if (staleLabels.length) await removeLabelsFromIssue(thread, staleLabels);
+
+  if (extraLabel) {
+    // The mirror label is the only thing that distinguishes this reason from a
+    // plain "not_planned" close. If it can't be applied, abort instead of
+    // closing — otherwise e.g. /duplicate silently degrades into /invalid.
+    const labelApplied = await addLabelsToIssue(thread, [extraLabel]);
+    if (!labelApplied) {
+      error(
+        `Aborting close: failed to apply "${extraLabel}" mirror label for reason "${reason}"`,
+        thread,
+      );
+      return;
+    }
+  }
 
   const state_reason = reason ? getGithubStateReason(reason) : undefined;
   const response = await update(issue_number, "closed", state_reason);
-  if (response === true) info(Actions.Closed, thread);
-  else if (response instanceof Error)
+  if (response === true) {
+    info(Actions.Closed, thread);
+    return;
+  }
+
+  // The close failed after the mirror label was applied; roll it back so the
+  // still-open issue isn't left carrying a stale closed-state label.
+  if (extraLabel) await removeLabelsFromIssue(thread, [extraLabel]);
+  if (response instanceof Error)
     error(`Failed to close issue: ${response.message}`, thread);
   else error("Failed to close issue due to an unknown error", thread);
 }

@@ -346,9 +346,11 @@ export async function addClosedStateTag(
   ];
 
   setPendingDiscordSync(thread, { appliedTags: next });
+  let tagsApplied = false;
   try {
     await channel.setAppliedTags(next);
     thread.appliedTags = next;
+    tagsApplied = true;
     info(Actions.Closed, thread);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown error";
@@ -357,7 +359,12 @@ export async function addClosedStateTag(
     clearPendingDiscordSyncField(thread, "appliedTags");
   }
 
-  await removeGithubLabelsForTagIds(thread, forum, removedClearTags);
+  // Only mirror the cleared tags to GitHub if Discord actually dropped them.
+  // Otherwise the sides diverge: Discord keeps the tag while GitHub loses the
+  // label.
+  if (tagsApplied) {
+    await removeGithubLabelsForTagIds(thread, forum, removedClearTags);
+  }
 }
 
 export async function removeClosedStateTag(node_id: string | undefined) {
