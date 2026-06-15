@@ -46,6 +46,11 @@ Tag mappings live in `src/tagMapping.config.json`:
   "closedStateGithubLabels": {
     "duplicate": "duplicate"
   },
+  "closedStateCommands": {
+    "completed": { "command": "complete", "description": "Close this post as completed. (Admin only)", "label": "completed" },
+    "not_planned": { "command": "invalid", "description": "Close this post as not planned / invalid. (Admin only)", "label": "invalid / not planned" },
+    "duplicate": { "command": "duplicate", "description": "Close this post as a duplicate. (Admin only)", "label": "a duplicate" }
+  },
   "labels": [
     { "github": "bug", "discord": "Bug" },
     { "github": "enhancement", "discord": "功能" }
@@ -73,6 +78,17 @@ distinguished there by an extra label configured in `closedStateGithubLabels`
 (here, the `duplicate` label). The label is applied on close and removed on
 reopen; a `not_planned` close that carries this label is mapped back to the
 `duplicate` Discord tag.
+
+`closedStateCommands` defines the admin-only slash command for each reason: the
+command name, its Discord description, and the phrase used in the bot's
+confirmation reply.
+
+**Adding a closed-state reason is config-only — no code change needed.** Add a
+matching key to `closedState` (the Discord tag) and `closedStateCommands` (the
+slash command); for any reason other than `completed`/`not_planned`, also add a
+`closedStateGithubLabels` entry (the GitHub mirror label). `completed` and
+`not_planned` are reserved names that map to GitHub's two native close reasons —
+every other reason is recorded on GitHub as `not_planned` plus its mirror label.
 
 `tagGroups` lets you group Discord forum tags. A group flagged
 `clearOnClose: true` has all of its tags removed from a post whenever it is

@@ -7,6 +7,23 @@
   "closedStateGithubLabels": {
     "duplicate": "duplicate"
   },
+  "closedStateCommands": {
+    "completed": {
+      "command": "complete",
+      "description": "Close this post as completed. (Admin only)",
+      "label": "completed"
+    },
+    "not_planned": {
+      "command": "invalid",
+      "description": "Close this post as not planned / invalid. (Admin only)",
+      "label": "invalid / not planned"
+    },
+    "duplicate": {
+      "command": "duplicate",
+      "description": "Close this post as a duplicate. (Admin only)",
+      "label": "a duplicate"
+    }
+  },
   "labels": [],
   "tagGroups": [
     {

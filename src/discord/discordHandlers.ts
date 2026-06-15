@@ -39,7 +39,12 @@ import {
 } from "../github/githubActions";
 import { logger } from "../logger";
 import { store } from "../store";
-import { ClosedReason } from "../tagMapping";
+import {
+  ClosedReason,
+  getClosedReasonByCommandName,
+  getClosedReasonCommands,
+  getClosedReasonLabel,
+} from "../tagMapping";
 import { areTagSetsEqual } from "../utils/tagSets";
 import { Thread } from "../interfaces";
 
@@ -151,24 +156,14 @@ export async function handleClientReady(client: Client) {
           type: ApplicationCommandType.ChatInput,
           dmPermission: false,
         },
-        {
-          name: "complete",
-          description: "Close this post as completed. (Admin only)",
+        // Close commands are config-driven (see closedStateCommands in
+        // tagMapping.config.json); one slash command per closed-state reason.
+        ...getClosedReasonCommands().map((c) => ({
+          name: c.command,
+          description: c.description,
           type: ApplicationCommandType.ChatInput,
           dmPermission: false,
-        },
-        {
-          name: "invalid",
-          description: "Close this post as not planned / invalid. (Admin only)",
-          type: ApplicationCommandType.ChatInput,
-          dmPermission: false,
-        },
-        {
-          name: "duplicate",
-          description: "Close this post as a duplicate. (Admin only)",
-          type: ApplicationCommandType.ChatInput,
-          dmPermission: false,
-        },
+        })),
       ]);
       logger.info(`Slash commands registered in guild ${guild.name}.`);
     } catch (err) {
@@ -380,12 +375,13 @@ export async function handleInteractionCreate(interaction: Interaction) {
       return handleLinkIssueCommand(interaction);
     case "unlink-issue":
       return handleUnlinkIssueCommand(interaction);
-    case "complete":
-      return handleCompleteCommand(interaction);
-    case "invalid":
-      return handleInvalidCommand(interaction);
-    case "duplicate":
-      return handleDuplicateCommand(interaction);
+  }
+
+  // Close commands are config-driven; dispatch by matching the command name
+  // against the configured closed-state reasons.
+  const closeReason = getClosedReasonByCommandName(interaction.commandName);
+  if (closeReason !== undefined) {
+    return handleCloseCommand(interaction, closeReason);
   }
 }
 
@@ -823,20 +819,10 @@ async function handleSyncToIssueCommand(
   }
 }
 
-const CLOSE_REASON_META: Record<
-  ClosedReason,
-  { command: string; label: string }
-> = {
-  completed: { command: "complete", label: "completed" },
-  not_planned: { command: "invalid", label: "invalid / not planned" },
-  duplicate: { command: "duplicate", label: "a duplicate" },
-};
-
 async function handleCloseCommand(
   interaction: ChatInputCommandInteraction,
   reason: ClosedReason,
 ) {
-  const meta = CLOSE_REASON_META[reason];
   try {
     if (!memberIsAdmin(interaction)) {
       await interaction.reply({
@@ -902,11 +888,11 @@ async function handleCloseCommand(
     }
 
     await interaction.editReply({
-      content: `Marked as ${meta.label} and closed the issue.`,
+      content: `Marked as ${getClosedReasonLabel(reason)} and closed the issue.`,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.stack || err.message : String(err);
-    logger.error(`/${meta.command} handler failed: ${msg}`);
+    logger.error(`close command (${reason}) handler failed: ${msg}`);
     const fallback = "Something went wrong while running the command.";
     try {
       if (interaction.deferred || interaction.replied) {
@@ -918,18 +904,4 @@ async function handleCloseCommand(
       /* interaction may already be expired */
     }
   }
-}
-
-async function handleCompleteCommand(interaction: ChatInputCommandInteraction) {
-  return handleCloseCommand(interaction, "completed");
-}
-
-async function handleInvalidCommand(interaction: ChatInputCommandInteraction) {
-  return handleCloseCommand(interaction, "not_planned");
-}
-
-async function handleDuplicateCommand(
-  interaction: ChatInputCommandInteraction,
-) {
-  return handleCloseCommand(interaction, "duplicate");
 }

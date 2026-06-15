@@ -10,7 +10,7 @@ import {
   syncIssueLabelTag,
   unlockThread,
 } from "../discord/discordActions";
-import { ClosedReason, getClosedStateGithubLabel } from "../tagMapping";
+import { ClosedReason, getClosedReasonFromGithubLabels } from "../tagMapping";
 import { getDiscordInfoFromGithubBody } from "./githubActions";
 
 function getIssueNodeId(req: Request): string | undefined {
@@ -42,18 +42,17 @@ export async function handleClosed(req: Request) {
 
   const node_id = getIssueNodeId(req);
   const { number, title, html_url, state_reason, labels } = req.body.issue;
-  // GitHub records only "completed"/"not_planned". A "not_planned" close is
-  // treated as "duplicate" when the duplicate mirror label is present.
-  const duplicateLabel = getClosedStateGithubLabel("duplicate");
-  const hasDuplicateLabel =
-    Boolean(duplicateLabel) &&
-    Array.isArray(labels) &&
-    labels.some((label: { name?: string }) => label?.name === duplicateLabel);
+  // GitHub records only "completed"/"not_planned". A "not_planned" close maps
+  // back to a custom reason (e.g. "duplicate") when that reason's mirror label
+  // is present on the issue.
+  const labelNames: string[] = Array.isArray(labels)
+    ? labels
+        .map((label: { name?: string }) => label?.name)
+        .filter((name: string | undefined): name is string => Boolean(name))
+    : [];
   const reason: ClosedReason =
     state_reason === "not_planned"
-      ? hasDuplicateLabel
-        ? "duplicate"
-        : "not_planned"
+      ? getClosedReasonFromGithubLabels(labelNames) ?? "not_planned"
       : "completed";
 
   // The closed-state tag is the single source of truth for issue state; we do

@@ -1,16 +1,28 @@
 import tagMappingConfig from "./tagMapping.config.json";
 
-export type ClosedReason = "completed" | "not_planned" | "duplicate";
-
-export const CLOSED_REASONS: readonly ClosedReason[] = [
-  "completed",
-  "not_planned",
-  "duplicate",
-];
+/**
+ * A closed-state reason. "completed" and "not_planned" are GitHub's only native
+ * close reasons; any other reason (e.g. "duplicate") is recorded on GitHub as
+ * "not_planned" and distinguished by a mirror label (see closedStateGithubLabels).
+ *
+ * Reasons are data-driven: add one by editing tagMapping.config.json, no code
+ * change required. The two names above are reserved — naming a custom reason
+ * "completed" or "not_planned" collides with the native mapping.
+ */
+export type ClosedReason = string;
 
 type LabelMapping = {
   github: string;
   discord: string;
+};
+
+type ClosedReasonCommand = {
+  /** Discord slash command name (without the leading slash). */
+  command: string;
+  /** Slash command description shown in Discord. */
+  description: string;
+  /** Human phrase used in the bot's confirmation reply, e.g. "a duplicate". */
+  label: string;
 };
 
 type TagGroup = {
@@ -23,12 +35,15 @@ type TagGroup = {
 };
 
 type TagMappingConfig = {
-  closedState: Record<ClosedReason, string>;
+  closedState: Record<string, string>;
   /** Extra GitHub label applied while a post is closed for a given reason and
    *  removed again on reopen. GitHub's REST API only records "completed" or
    *  "not_planned" as a close reason, so a reason like "duplicate" is mirrored
    *  to GitHub through this label instead. */
-  closedStateGithubLabels?: Partial<Record<ClosedReason, string>>;
+  closedStateGithubLabels?: Record<string, string>;
+  /** Per-reason Discord slash command metadata (command name, description, and
+   *  the phrase used in the confirmation reply). */
+  closedStateCommands: Record<string, ClosedReasonCommand>;
   labels?: LabelMapping[];
   tagGroups?: TagGroup[];
 };
@@ -44,9 +59,15 @@ const rawTagMapping = tagMappingConfig as TagMappingConfig;
 export const tagMapping = {
   closedState: rawTagMapping.closedState,
   closedStateGithubLabels: rawTagMapping.closedStateGithubLabels ?? {},
+  closedStateCommands: rawTagMapping.closedStateCommands,
   labels: rawTagMapping.labels ?? [],
   tagGroups: rawTagMapping.tagGroups ?? [],
 } satisfies Required<TagMappingConfig>;
+
+/** All configured closed-state reasons, derived from the config. */
+export const CLOSED_REASONS: readonly ClosedReason[] = Object.keys(
+  tagMapping.closedState,
+);
 
 export function isClosedStateDiscordTagName(tagName: string) {
   return Object.values(tagMapping.closedState).includes(tagName);
@@ -85,6 +106,46 @@ export function getAllClosedStateGithubLabels(): string[] {
   return Object.values(tagMapping.closedStateGithubLabels).filter(
     (label): label is string => Boolean(label),
   );
+}
+
+/**
+ * The closed-state reason whose mirror label is present among the given GitHub
+ * labels, if any. Used on a GitHub-side "not_planned" close to recover a custom
+ * reason (e.g. "duplicate") that GitHub can't record natively.
+ */
+export function getClosedReasonFromGithubLabels(
+  labelNames: string[],
+): ClosedReason | undefined {
+  return CLOSED_REASONS.find((reason) => {
+    const label = getClosedStateGithubLabel(reason);
+    return label !== undefined && labelNames.includes(label);
+  });
+}
+
+/** Per-reason Discord slash command metadata, derived from the config. */
+export function getClosedReasonCommands(): {
+  reason: ClosedReason;
+  command: string;
+  description: string;
+  label: string;
+}[] {
+  return CLOSED_REASONS.flatMap((reason) => {
+    const meta = tagMapping.closedStateCommands[reason];
+    return meta ? [{ reason, ...meta }] : [];
+  });
+}
+
+/** The closed-state reason a given Discord slash command name closes with. */
+export function getClosedReasonByCommandName(
+  commandName: string,
+): ClosedReason | undefined {
+  return getClosedReasonCommands().find((c) => c.command === commandName)
+    ?.reason;
+}
+
+/** The confirmation-reply phrase for a reason, e.g. "a duplicate". */
+export function getClosedReasonLabel(reason: ClosedReason): string {
+  return tagMapping.closedStateCommands[reason]?.label ?? reason;
 }
 
 /**
