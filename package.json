@@ -4,6 +4,10 @@
   "description": "",
   "main": "dist/index.js",
   "scripts": {
+    "ensure-config": "node scripts/ensureConfig.js",
+    "predev": "node scripts/ensureConfig.js",
+    "prebuild": "node scripts/ensureConfig.js",
+    "prestart": "node scripts/ensureConfig.js",
     "dev": "tsx watch src/index.ts",
     "start": "node .",
     "build": "webpack",

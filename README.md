@@ -34,7 +34,11 @@ This Discord bot serves as a seamless bridge between Discord thread channel and 
 - \[ ] Discord Post Tag Changes -> Future implementation: Update GitHub issue labels from Discord.
 - \[x] GitHub Issue Label Changes -> Reflect GitHub label add/remove actions in Discord post tags.
 
-Tag mappings live in `src/tagMapping.config.json`:
+Tag mappings live in `src/tagMapping.config.json`. This file is per-deployment
+and git-ignored, so updates never overwrite your values. It is seeded
+automatically from the committed `src/tagMapping.config.example.json` on the
+first `npm run dev` / `build` / `start` (or run `npm run ensure-config`). Edit
+your local copy to match your Discord forum tags and GitHub labels. Shape:
 
 ```json
 {
@@ -47,16 +51,32 @@ Tag mappings live in `src/tagMapping.config.json`:
     "duplicate": "duplicate"
   },
   "closedStateCommands": {
-    "completed": { "command": "complete", "description": "Close this post as completed. (Admin only)", "label": "completed" },
-    "not_planned": { "command": "invalid", "description": "Close this post as not planned / invalid. (Admin only)", "label": "invalid / not planned" },
-    "duplicate": { "command": "duplicate", "description": "Close this post as a duplicate. (Admin only)", "label": "a duplicate" }
+    "completed": {
+      "command": "complete",
+      "description": "Close this post as completed. (Admin only)",
+      "label": "completed"
+    },
+    "not_planned": {
+      "command": "invalid",
+      "description": "Close this post as not planned / invalid. (Admin only)",
+      "label": "invalid / not planned"
+    },
+    "duplicate": {
+      "command": "duplicate",
+      "description": "Close this post as a duplicate. (Admin only)",
+      "label": "a duplicate"
+    }
   },
   "labels": [
     { "github": "bug", "discord": "Bug" },
     { "github": "enhancement", "discord": "功能" }
   ],
   "tagGroups": [
-    { "name": "in-progress", "clearOnClose": true, "tags": ["进行中", "待审核"] }
+    {
+      "name": "in-progress",
+      "clearOnClose": true,
+      "tags": ["进行中", "待审核"]
+    }
   ]
 }
 ```

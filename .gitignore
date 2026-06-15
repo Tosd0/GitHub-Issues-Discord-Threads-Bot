@@ -4,5 +4,8 @@ node_modules
 package-lock.json
 yarn.lock
 
+# Per-deployment tag config; seeded from tagMapping.config.example.json.
+src/tagMapping.config.json
+
 dist
 logs
