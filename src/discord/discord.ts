@@ -11,18 +11,20 @@ import {
   handleChannelUpdate,
   handleClientReady,
   handleInteractionCreate,
-  handleMessageCreate,
   handleMessageDelete,
   handleThreadCreate,
   handleThreadDelete,
   handleThreadUpdate,
 } from "./discordHandlers";
 
+// No privileged intents. Message text reaches the bot only through the
+// "Create Issue" / "Sync to Issue" message context menu commands, whose
+// interaction payload carries the full message regardless of MessageContent.
+// GuildMessages stays for MessageDelete, which only needs message ids.
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages,
   ],
   ws: {
@@ -65,7 +67,6 @@ export function initDiscord() {
   client.on(Events.ChannelUpdate, (_oldChannel, newChannel) =>
     handleChannelUpdate(newChannel),
   );
-  client.on(Events.MessageCreate, handleMessageCreate);
   client.on(Events.ThreadDelete, handleThreadDelete);
   client.on(Events.MessageDelete, handleMessageDelete);
   client.on(Events.InteractionCreate, handleInteractionCreate);

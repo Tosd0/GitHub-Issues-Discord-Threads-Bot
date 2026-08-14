@@ -99,10 +99,11 @@ export async function handleClientReady(client: Client) {
     try {
       await guild.commands.set([
         {
-          name: "create-issue",
-          description:
-            "Create a GitHub issue from this forum post. (Admin only)",
-          type: ApplicationCommandType.ChatInput,
+          // Message context menu rather than a slash command: the interaction
+          // payload carries the post's text and attachments, so the bot needs
+          // no MessageContent intent to build the issue body.
+          name: "Create Issue",
+          type: ApplicationCommandType.Message,
           dmPermission: false,
         },
         {
@@ -307,20 +308,6 @@ export async function handleThreadUpdate(params: AnyThreadChannel) {
   }
 }
 
-export async function handleMessageCreate(params: Message) {
-  const { channelId, author } = params;
-
-  if (author.bot) return;
-  if (!config.AUTO_SYNC_COMMENTS) return;
-
-  const thread = store.threads.find((thread) => thread.id === channelId);
-
-  if (!thread) return;
-  if (!thread.number) return;
-
-  createIssueComment(thread, params);
-}
-
 export async function handleMessageDelete(params: Message | PartialMessage) {
   const { channelId, id } = params;
   const thread = store.threads.find((i) => i.id === channelId);
@@ -356,8 +343,11 @@ export async function handleInteractionCreate(interaction: Interaction) {
   }
 
   if (interaction.isMessageContextMenuCommand()) {
-    if (interaction.commandName === "Sync to Issue") {
-      return handleSyncToIssueCommand(interaction);
+    switch (interaction.commandName) {
+      case "Create Issue":
+        return handleCreateIssueCommand(interaction);
+      case "Sync to Issue":
+        return handleSyncToIssueCommand(interaction);
     }
     return;
   }
@@ -365,8 +355,6 @@ export async function handleInteractionCreate(interaction: Interaction) {
   if (!interaction.isChatInputCommand()) return;
 
   switch (interaction.commandName) {
-    case "create-issue":
-      return handleCreateIssueCommand(interaction);
     case "subscribe-issue":
       return handleSubscribeIssueCommand(interaction);
     case "add-tag":
@@ -453,7 +441,7 @@ async function ensureForumThread(
 }
 
 async function handleCreateIssueCommand(
-  interaction: ChatInputCommandInteraction,
+  interaction: MessageContextMenuCommandInteraction,
 ) {
   try {
     if (!memberIsAdmin(interaction)) {
@@ -466,6 +454,21 @@ async function handleCreateIssueCommand(
 
     const channel = await ensureForumThread(interaction);
     if (!channel) return;
+
+    const starter = interaction.targetMessage;
+
+    // A forum post's first message shares its id with the post itself. The
+    // issue body embeds this message's URL, and that URL is what re-attaches
+    // the issue to its post on restart, so only the first message can back an
+    // issue — any other one would point the issue at a non-existent post.
+    if (starter.id !== channel.id) {
+      await interaction.reply({
+        content:
+          "Run this on the first message of the post (the one that opened it).",
+        ephemeral: true,
+      });
+      return;
+    }
 
     let thread = store.threads.find((t) => t.id === channel.id);
     if (!thread) {
@@ -490,14 +493,6 @@ async function handleCreateIssueCommand(
 
     await interaction.deferReply();
 
-    const starter = await channel.fetchStarterMessage().catch(() => null);
-    if (!starter) {
-      await interaction.editReply({
-        content: "Could not read the starter message of this post.",
-      });
-      return;
-    }
-
     thread.title = channel.name;
     thread.appliedTags = channel.appliedTags;
 
@@ -516,8 +511,8 @@ async function handleCreateIssueCommand(
     }
   } catch (err) {
     const msg = err instanceof Error ? err.stack || err.message : String(err);
-    logger.error(`/create-issue handler failed: ${msg}`);
-    const fallback = "Something went wrong while running /create-issue.";
+    logger.error(`"Create Issue" handler failed: ${msg}`);
+    const fallback = "Something went wrong while creating the issue.";
     try {
       if (interaction.deferred || interaction.replied) {
         await interaction.editReply({ content: fallback });
