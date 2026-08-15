@@ -314,7 +314,12 @@ export async function handleThreadUpdate(params: AnyThreadChannel) {
 
   if (!pending.locked && thread.locked !== locked) {
     thread.locked = locked;
-    locked ? await lockIssue(thread) : await unlockIssue(thread);
+    // A post with no linked issue has nothing to mirror the lock to. Calling
+    // through would only log an error, which `lockOnClose` would then produce
+    // every time an unlinked post is closed. Same guard as the tag sync above.
+    if (thread.number) {
+      locked ? await lockIssue(thread) : await unlockIssue(thread);
+    }
   }
   // Archive state is NO LONGER synced to GitHub issue state. A Discord forum
   // thread auto-unarchives whenever a message is posted to it, so treating
@@ -345,6 +350,9 @@ export async function handleThreadDelete(params: AnyThreadChannel) {
 
   const thread = store.threads.find((item) => item.id === params.id);
   if (!thread) return;
+
+  // Nothing to delete on GitHub for a post that was never linked to an issue.
+  if (!thread.node_id) return;
 
   deleteIssue(thread);
 }
