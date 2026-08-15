@@ -122,9 +122,13 @@ export function initGithub() {
     res.json({ msg: "ok" });
   });
 
-  const PORT = process.env.PORT || 5000;
-  app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+  // Loopback by default: the webhook endpoint is meant to sit behind a reverse
+  // proxy or an SSH tunnel, not to face the internet on its own. Set
+  // HOST=0.0.0.0 to reach it from another machine.
+  const PORT = Number(process.env.PORT) || 5000;
+  const HOST = process.env.HOST || "127.0.0.1";
+  app.listen(PORT, HOST, () => {
+    console.log(`Server is running on ${HOST}:${PORT}`);
   });
 }
 

@@ -222,6 +222,14 @@ Invite url: https://discord.com/api/oauth2/authorize?client_id=APPLICATION_ID&pe
   4. Generate and copy the personal access token.
 - GITHUB_USERNAME - example: https://github.com/<GITHUB_USERNAME>/<GITHUB_REPOSITORY>
 - GITHUB_REPOSITORY
+- GITHUB_WEBHOOK_SECRET - optional but recommended. The shared secret set on the
+  GitHub webhook; requests with a missing or invalid `X-Hub-Signature-256` are
+  rejected with 401. Leaving it blank disables verification, which means anyone
+  who can reach the endpoint can drive the bot.
+- HOST / PORT - optional. Where the webhook endpoint listens, `127.0.0.1:5000`
+  by default. That is what a reverse proxy or the SSH tunnel below reaches from
+  the same machine. Set `HOST=0.0.0.0` only when the endpoint has to be
+  reachable from another machine — and set GITHUB_WEBHOOK_SECRET if you do.
 
 > **_NOTE:_** For detailed information about personal access tokens, visit the [Managing your personal access tokens - GitHub Docs](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
 
