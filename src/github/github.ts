@@ -75,6 +75,25 @@ function verifyGithubSignature(
   return next();
 }
 
+/**
+ * One-line summary of a webhook delivery for the log, e.g.
+ * "issues.closed #456". Falls back gracefully when GitHub sends an event
+ * without an action (a ping, say) or without an issue.
+ */
+function describeWebhook(req: Request): string {
+  const header = req.headers["x-github-event"];
+  const event = (Array.isArray(header) ? header[0] : header) || "unknown";
+  const action = req.body?.action;
+  const issueNumber = req.body?.issue?.number;
+
+  return [
+    action ? `${event}.${action}` : event,
+    issueNumber && `#${issueNumber}`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 export function initGithub() {
   if (!config.GITHUB_WEBHOOK_SECRET) {
     logger.warn(
@@ -100,6 +119,11 @@ export function initGithub() {
   };
 
   app.post("/", verifyGithubSignature, (req, res) => {
+    // Record every accepted delivery. Without this an event that maps to no
+    // Discord post is indistinguishable from one that never arrived, which
+    // makes "did GitHub reach us?" impossible to answer from the logs.
+    logger.info(`webhook: ${describeWebhook(req)}`);
+
     if (!isDiscordBootstrapped()) {
       return res.status(503).json({ msg: "discord client not ready" });
     }
