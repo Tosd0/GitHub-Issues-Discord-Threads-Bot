@@ -242,3 +242,14 @@ Forward for github webhooks:
 ```bash
 ssh -R 80:localhost:5000 serveo.net
 ```
+
+#### Tests
+
+```bash
+npm test
+```
+
+Covers the pieces where a silent regression would be hard to spot: parsing the
+post link `/duplicate` takes, and the marker that keeps the bot's own GitHub
+notes from being mirrored back into the forum post. No tokens or network
+access needed.
