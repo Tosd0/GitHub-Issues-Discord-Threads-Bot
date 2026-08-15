@@ -8,7 +8,14 @@ module.exports = {
     rules: [
       {
         test: /\.tsx?$/,
-        use: "ts-loader",
+        use: {
+          loader: "ts-loader",
+          // Compile only what the bundle actually reaches. Without this
+          // ts-loader type-checks every file tsconfig covers, so the build
+          // pulls in the *.test.ts files and fails wherever the test runner
+          // is not installed. `npx tsc --noEmit` still checks them.
+          options: { onlyCompileBundledFiles: true },
+        },
         exclude: /node_modules/,
       },
     ],
