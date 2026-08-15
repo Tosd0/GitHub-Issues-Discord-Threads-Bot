@@ -21,7 +21,14 @@
     "duplicate": {
       "command": "duplicate",
       "description": "Close this post as a duplicate. (Admin only)",
-      "label": "a duplicate"
+      "label": "a duplicate",
+      "lockOnClose": true,
+      "reference": {
+        "option": "post",
+        "optionDescription": "Link to the post this one duplicates.",
+        "message": "此帖与帖子 {link} 重复。后续请在对应位置集中讨论。",
+        "githubMessage": "Duplicate of #{number}"
+      }
     }
   },
   "labels": [],

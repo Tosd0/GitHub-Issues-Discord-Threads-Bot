@@ -3,6 +3,7 @@ import {
   ApplicationCommandOptionType,
   ApplicationCommandType,
   AutocompleteInteraction,
+  ChatInputApplicationCommandData,
   ChatInputCommandInteraction,
   Client,
   DMChannel,
@@ -25,6 +26,7 @@ import {
 import {
   addLabelsToIssue,
   closeIssue,
+  createBotIssueComment,
   createIssue,
   createIssueComment,
   deleteComment,
@@ -44,7 +46,10 @@ import {
   getClosedReasonByCommandName,
   getClosedReasonCommands,
   getClosedReasonLabel,
+  getClosedReasonReference,
+  locksOnClose,
 } from "../tagMapping";
+import { parseDiscordPostId } from "../utils/discordLinks";
 import { areTagSetsEqual } from "../utils/tagSets";
 import { Thread } from "../interfaces";
 
@@ -159,12 +164,26 @@ export async function handleClientReady(client: Client) {
         },
         // Close commands are config-driven (see closedStateCommands in
         // tagMapping.config.json); one slash command per closed-state reason.
-        ...getClosedReasonCommands().map((c) => ({
-          name: c.command,
-          description: c.description,
-          type: ApplicationCommandType.ChatInput,
-          dmPermission: false,
-        })),
+        // A reason configured with a `reference` also takes an optional link to
+        // the post it points at, e.g. /duplicate post:<link>.
+        ...getClosedReasonCommands().map(
+          (c): ChatInputApplicationCommandData => ({
+            name: c.command,
+            description: c.description,
+            type: ApplicationCommandType.ChatInput,
+            dmPermission: false,
+            options: c.reference
+              ? [
+                  {
+                    name: c.reference.option,
+                    description: c.reference.optionDescription,
+                    type: ApplicationCommandOptionType.String,
+                    required: false,
+                  },
+                ]
+              : [],
+          }),
+        ),
       ]);
       logger.info(`Slash commands registered in guild ${guild.name}.`);
     } catch (err) {
@@ -830,7 +849,46 @@ async function handleCloseCommand(
     const channel = await ensureForumThread(interaction);
     if (!channel) return;
 
+    // Reasons configured with a `reference` take an optional link to the post
+    // this one points at, e.g. /duplicate post:<link>.
+    const reference = getClosedReasonReference(reason);
+    const referenceInput = reference
+      ? interaction.options.getString(reference.option)
+      : null;
+
+    let referencedId: string | undefined;
+    if (referenceInput) {
+      referencedId = parseDiscordPostId(referenceInput);
+      if (!referencedId) {
+        await interaction.reply({
+          content:
+            "Could not read that link. Paste a link to the post, or its id.",
+          ephemeral: true,
+        });
+        return;
+      }
+      if (referencedId === channel.id) {
+        await interaction.reply({
+          content: "That link points at this very post.",
+          ephemeral: true,
+        });
+        return;
+      }
+    }
+
     await interaction.deferReply();
+
+    if (referencedId) {
+      const referenced = await interaction.client.channels
+        .fetch(referencedId)
+        .catch(() => null);
+      if (!referenced?.isThread()) {
+        await interaction.editReply({
+          content: "Could not find the post that link points at.",
+        });
+        return;
+      }
+    }
 
     const forum = channel.parent;
     if (!(forum instanceof ForumChannel)) {
@@ -882,9 +940,44 @@ async function handleCloseCommand(
       await removeGithubLabelsForTagIds(thread, forum, removedClearTags);
     }
 
+    // Point members at the other post, and record the same pointer on the
+    // issue when both posts are linked to one.
+    let notice: string | undefined;
+    if (reference && referencedId) {
+      notice = reference.message.split("{link}").join(`<#${referencedId}>`);
+
+      const referencedThread = store.threads.find((t) => t.id === referencedId);
+      if (
+        reference.githubMessage &&
+        thread?.number &&
+        referencedThread?.number
+      ) {
+        await createBotIssueComment(
+          thread,
+          reference.githubMessage
+            .split("{number}")
+            .join(String(referencedThread.number)),
+        );
+      }
+    }
+
     await interaction.editReply({
-      content: `Marked as ${getClosedReasonLabel(reason)} and closed the issue.`,
+      content: [
+        `Marked as ${getClosedReasonLabel(reason)} and closed the issue.`,
+        notice,
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join("\n"),
     });
+
+    // The thread-update handler mirrors Discord's lock state to GitHub, so the
+    // issue ends up locked too.
+    if (locksOnClose(reason) && !channel.locked) {
+      await channel.setLocked(true).catch((err) => {
+        const msg = err instanceof Error ? err.message : "unknown error";
+        logger.error(`Failed to lock post after closing it: ${msg}`);
+      });
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.stack || err.message : String(err);
     logger.error(`close command (${reason}) handler failed: ${msg}`);

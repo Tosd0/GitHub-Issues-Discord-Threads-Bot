@@ -18,6 +18,7 @@ import {
   getGithubLabelNameForDiscordTag,
   getGithubStateReason,
 } from "../tagMapping";
+import { markAsBotComment } from "../utils/botComments";
 
 export const octokit = new Octokit({
   auth: config.GITHUB_ACCESS_TOKEN,
@@ -540,6 +541,32 @@ export async function createIssueComment(thread: Thread, params: Message) {
     } else {
       error("Failed to create comment due to an unknown error", thread);
     }
+  }
+}
+
+/**
+ * Leave a note on the issue written by the bot itself. Unlike
+ * createIssueComment this has no Discord message behind it, so it is not
+ * tracked in thread.comments. The body is marked so the GitHub→Discord mirror
+ * skips it (see handleCreated) instead of bouncing it back into the post.
+ */
+export async function createBotIssueComment(thread: Thread, body: string) {
+  const { number: issue_number } = thread;
+  if (!issue_number) {
+    error("Thread does not have an issue number", thread);
+    return;
+  }
+
+  try {
+    await octokit.rest.issues.createComment({
+      ...repoCredentials,
+      issue_number,
+      body: markAsBotComment(body),
+    });
+    info(Actions.Commented, thread);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "unknown error";
+    error(`Failed to create comment: ${message}`, thread);
   }
 }
 

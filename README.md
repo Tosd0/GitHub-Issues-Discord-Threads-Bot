@@ -68,7 +68,14 @@ your local copy to match your Discord forum tags and GitHub labels. Shape:
     "duplicate": {
       "command": "duplicate",
       "description": "Close this post as a duplicate. (Admin only)",
-      "label": "a duplicate"
+      "label": "a duplicate",
+      "lockOnClose": true,
+      "reference": {
+        "option": "post",
+        "optionDescription": "Link to the post this one duplicates.",
+        "message": "此帖与帖子 {link} 重复。后续请在对应位置集中讨论。",
+        "githubMessage": "Duplicate of #{number}"
+      }
     }
   },
   "labels": [
@@ -105,7 +112,19 @@ reopen; a `not_planned` close that carries this label is mapped back to the
 
 `closedStateCommands` defines the admin-only slash command for each reason: the
 command name, its Discord description, and the phrase used in the bot's
-confirmation reply.
+confirmation reply. Two optional settings per reason:
+
+- `lockOnClose: true` locks the forum post after closing it. Discord's lock
+  state is mirrored to GitHub, so the linked issue ends up locked as well.
+- `reference` adds an optional slash command argument pointing at another post,
+  e.g. `/duplicate post:<link>`. Fill it in and the bot's reply names that post;
+  leave it out and the command behaves as it did before. `option` /
+  `optionDescription` name and describe the argument in Discord, `message` is
+  the notice posted in the forum post (`{link}` becomes a link to the referenced
+  post), and `githubMessage` is a note left on the GitHub issue (`{number}`
+  becomes the referenced post's issue number). The note is skipped when
+  `githubMessage` is omitted or either post has no linked issue. The argument
+  accepts a Discord post link or a bare post id.
 
 **Adding a closed-state reason is config-only — no code change needed.** Add a
 matching key to `closedState` (the Discord tag) and `closedStateCommands` (the
@@ -151,6 +170,11 @@ as soon as anyone posts a message, which used to be synced back as a reopen.
   slash commands close the post (and its issue) with the matching closed-state
   tag. They also clear any `clearOnClose` tag group (see Tags & Labels) from
   both Discord and GitHub.
+- \[x] `/duplicate` -> Closes the post as a duplicate and locks it. Pass
+  `post:<link>` to point members at the post this one duplicates: the bot's
+  reply links that post, and if both posts are linked to issues it also leaves a
+  `Duplicate of #N` note on the GitHub issue. Configured under
+  `closedStateCommands` (see Tags & Labels).
 
 #### Deletion Actions
 

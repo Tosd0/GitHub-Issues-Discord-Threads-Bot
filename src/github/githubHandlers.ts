@@ -11,6 +11,7 @@ import {
   unlockThread,
 } from "../discord/discordActions";
 import { ClosedReason, getClosedReasonFromGithubLabels } from "../tagMapping";
+import { isBotAuthoredIssueComment } from "../utils/botComments";
 import { getDiscordInfoFromGithubBody } from "./githubActions";
 
 function getIssueNodeId(req: Request): string | undefined {
@@ -27,6 +28,10 @@ export async function handleCreated(req: Request) {
     // If it does, stop processing (assuming created with a bot)
     return;
   }
+
+  // Notes the bot writes on the issue itself (e.g. "Duplicate of #12") already
+  // have their Discord-side counterpart; mirroring them back would double up.
+  if (isBotAuthoredIssueComment(body)) return;
 
   createComment({
     git_id: id,

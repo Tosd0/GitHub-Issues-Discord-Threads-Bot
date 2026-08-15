@@ -16,13 +16,37 @@ type LabelMapping = {
   discord: string;
 };
 
-type ClosedReasonCommand = {
+/**
+ * An optional "which post does this one point at" argument for a close command.
+ * Configuring it adds a slash command option taking a Discord post link (or a
+ * bare post id); when the admin fills it in, the bot posts `message` in the
+ * forum post and, if `githubMessage` is set and both posts are linked to
+ * issues, leaves that note on the GitHub issue as well.
+ */
+type ClosedReasonReference = {
+  /** Slash command option name, e.g. "post". */
+  option: string;
+  /** Option description shown in Discord. */
+  optionDescription: string;
+  /** Notice posted in the forum post. `{link}` becomes a link to the post. */
+  message: string;
+  /** Comment left on the GitHub issue. `{number}` becomes the referenced
+   *  post's issue number. Omit to skip the GitHub comment. */
+  githubMessage?: string;
+};
+
+export type ClosedReasonCommand = {
   /** Discord slash command name (without the leading slash). */
   command: string;
   /** Slash command description shown in Discord. */
   description: string;
   /** Human phrase used in the bot's confirmation reply, e.g. "a duplicate". */
   label: string;
+  /** Lock the forum post after closing it with this reason. Discord's lock
+   *  state is mirrored to GitHub, so the issue ends up locked too. */
+  lockOnClose?: boolean;
+  /** See ClosedReasonReference. */
+  reference?: ClosedReasonReference;
 };
 
 type TagGroup = {
@@ -123,12 +147,9 @@ export function getClosedReasonFromGithubLabels(
 }
 
 /** Per-reason Discord slash command metadata, derived from the config. */
-export function getClosedReasonCommands(): {
+export function getClosedReasonCommands(): (ClosedReasonCommand & {
   reason: ClosedReason;
-  command: string;
-  description: string;
-  label: string;
-}[] {
+})[] {
   return CLOSED_REASONS.flatMap((reason) => {
     const meta = tagMapping.closedStateCommands[reason];
     return meta ? [{ reason, ...meta }] : [];
@@ -146,6 +167,16 @@ export function getClosedReasonByCommandName(
 /** The confirmation-reply phrase for a reason, e.g. "a duplicate". */
 export function getClosedReasonLabel(reason: ClosedReason): string {
   return tagMapping.closedStateCommands[reason]?.label ?? reason;
+}
+
+/** The "points at another post" argument for a reason, if it has one. */
+export function getClosedReasonReference(reason: ClosedReason) {
+  return tagMapping.closedStateCommands[reason]?.reference;
+}
+
+/** Whether closing with this reason also locks the forum post. */
+export function locksOnClose(reason: ClosedReason): boolean {
+  return tagMapping.closedStateCommands[reason]?.lockOnClose === true;
 }
 
 /**
