@@ -22,6 +22,10 @@ This Discord bot serves as a seamless bridge between Discord thread channel and 
   safely delete the current one without deleting the issue).
 - \[ ] GitHub Issue Creation -> Not auto-mirrored. Use `/link-issue number:<n>`
   from an existing Discord post to attach a GitHub issue manually.
+- \[x] Mention everyone in a post (`/mention-all`) -> Admin-only slash
+  command that pings every person who has written in the current forum
+  post, post author included. Bots are skipped; long lists are split across
+  several messages.
 
 #### Comments
 

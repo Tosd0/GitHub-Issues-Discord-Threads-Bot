@@ -162,6 +162,13 @@ export async function handleClientReady(client: Client) {
           type: ApplicationCommandType.ChatInput,
           dmPermission: false,
         },
+        {
+          name: "mention-all",
+          description:
+            "Mention everyone who has posted in this forum post. (Admin only)",
+          type: ApplicationCommandType.ChatInput,
+          dmPermission: false,
+        },
         // Close commands are config-driven (see closedStateCommands in
         // tagMapping.config.json); one slash command per closed-state reason.
         // A reason configured with a `reference` also takes an optional link to
@@ -390,6 +397,8 @@ export async function handleInteractionCreate(interaction: Interaction) {
       return handleLinkIssueCommand(interaction);
     case "unlink-issue":
       return handleUnlinkIssueCommand(interaction);
+    case "mention-all":
+      return handleMentionAllCommand(interaction);
   }
 
   // Close commands are config-driven; dispatch by matching the command name
@@ -841,6 +850,107 @@ async function handleSyncToIssueCommand(
   }
 }
 
+/**
+ * Every human who has written in the post, oldest first, with the post
+ * author in front. Pages through the whole message history; the bot needs
+ * no MessageContent intent for this since only author ids are read.
+ */
+export async function collectThreadParticipantIds(
+  channel: Pick<ThreadChannel, "messages" | "ownerId">,
+): Promise<string[]> {
+  const ids = new Set<string>();
+  if (channel.ownerId) ids.add(channel.ownerId);
+
+  const newestFirst: string[] = [];
+  let before: string | undefined;
+  for (;;) {
+    const page = await channel.messages.fetch({ limit: 100, before });
+    if (page.size === 0) break;
+    for (const message of page.values()) {
+      if (!message.author.bot) newestFirst.push(message.author.id);
+    }
+    before = page.last()?.id;
+    if (page.size < 100) break;
+  }
+  for (const id of newestFirst.reverse()) ids.add(id);
+  return [...ids];
+}
+
+const DISCORD_MESSAGE_LIMIT = 2000;
+
+/** Splits `<@id>` mentions into messages that fit Discord's length limit. */
+export function buildMentionChunks(userIds: string[]): string[] {
+  const chunks: string[] = [];
+  let current = "";
+  for (const id of userIds) {
+    const mention = `<@${id}>`;
+    const next = current ? `${current} ${mention}` : mention;
+    if (next.length > DISCORD_MESSAGE_LIMIT) {
+      chunks.push(current);
+      current = mention;
+    } else {
+      current = next;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+async function handleMentionAllCommand(
+  interaction: ChatInputCommandInteraction,
+) {
+  try {
+    if (!memberIsAdmin(interaction)) {
+      await interaction.reply({
+        content: "You don't have permission to use this command.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const channel = await ensureForumThread(interaction);
+    if (!channel) return;
+
+    await interaction.deferReply();
+
+    const participantIds = await collectThreadParticipantIds(channel);
+    if (participantIds.length === 0) {
+      await interaction.editReply({
+        content: "Nobody has posted in this thread yet.",
+      });
+      return;
+    }
+
+    // One reply, then follow-ups if the mention list overflows a message.
+    // allowedMentions is set explicitly so every listed user actually gets
+    // pinged rather than just rendered.
+    const [first, ...rest] = buildMentionChunks(participantIds);
+    await interaction.editReply({
+      content: first,
+      allowedMentions: { users: participantIds },
+    });
+    for (const chunk of rest) {
+      await interaction.followUp({
+        content: chunk,
+        allowedMentions: { users: participantIds },
+      });
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.stack || err.message : String(err);
+    logger.error(`/mention-all handler failed: ${msg}`);
+    const fallback = "Something went wrong while running /mention-all.";
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({ content: fallback });
+      } else {
+        await interaction.reply({ content: fallback, ephemeral: true });
+      }
+    } catch {
+      /* interaction may already be expired */
+    }
+  }
+}
+
 async function handleCloseCommand(
   interaction: ChatInputCommandInteraction,
   reason: ClosedReason,
@@ -916,8 +1026,8 @@ async function handleCloseCommand(
 
     // Drop every other closed-state tag (they are mutually exclusive) and any
     // in-progress (clear-on-close) tag, then apply the target closed-state tag.
-    const allClosedIds = Object.values(closedIds).filter(
-      (id): id is string => Boolean(id),
+    const allClosedIds = Object.values(closedIds).filter((id): id is string =>
+      Boolean(id),
     );
     const clearIds = getClearOnCloseTagIds(forum);
     const removedClearTags = channel.appliedTags.filter((id) =>
