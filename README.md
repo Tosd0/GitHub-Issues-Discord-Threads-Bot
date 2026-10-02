@@ -146,6 +146,23 @@ names in `tags` (leave the array empty to disable). State is **not** preserved:
 reopening a post does not restore previously cleared tags — re-apply them
 manually if needed.
 
+`/confirmed` marks an open post as confirmed, replacing its triage tags.
+`/reopen` removes all closed-state and current triage/confirmed tags, applies
+its default triage tag, and unlocks/unarchives the post when needed. Both are
+admin-only and preserve unrelated tags such as priority. They also work on
+posts without a linked issue; linked issues and status labels are mirrored
+explicitly to GitHub. `/confirmed` rejects closed posts; use `/reopen` first.
+
+`statusCommandLabels` configures the GitHub label names for these commands:
+`{ "confirmed": "confirmed", "reopen": "needs triage" }`. These are also the
+backward-compatible defaults for deployments without this setting. Discord
+names are resolved through `labels`, so `needs triage` can map to `需要分拣`
+and `confirmed` to `已确认`. The target forum tags must already exist.
+The commands clear tags in `clearOnClose` groups plus both configured status
+labels. To also clear the confirmed tag when closing a post, include its
+Discord name in a `clearOnClose` group. GitHub-side reopening still only
+removes closed-state tags; `/reopen` explicitly restores the default status.
+
 `labels` is for normal GitHub label <-> Discord forum tag mapping. Put entries
 there when the names differ. Example: `{ "github": "enhancement", "discord": "功能" }`
 means GitHub label `enhancement` maps to Discord tag `功能`. Leave `labels` empty

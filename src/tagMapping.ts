@@ -68,6 +68,9 @@ type TagMappingConfig = {
   /** Per-reason Discord slash command metadata (command name, description, and
    *  the phrase used in the confirmation reply). */
   closedStateCommands: Record<string, ClosedReasonCommand>;
+  /** GitHub label names used by /confirmed and /reopen. Discord names are
+   * resolved through the ordinary label mapping. */
+  statusCommandLabels?: { confirmed?: string; reopen?: string };
   labels?: LabelMapping[];
   tagGroups?: TagGroup[];
 };
@@ -84,6 +87,10 @@ export const tagMapping = {
   closedState: rawTagMapping.closedState,
   closedStateGithubLabels: rawTagMapping.closedStateGithubLabels ?? {},
   closedStateCommands: rawTagMapping.closedStateCommands,
+  statusCommandLabels: {
+    confirmed: rawTagMapping.statusCommandLabels?.confirmed ?? "confirmed",
+    reopen: rawTagMapping.statusCommandLabels?.reopen ?? "needs triage",
+  },
   labels: rawTagMapping.labels ?? [],
   tagGroups: rawTagMapping.tagGroups ?? [],
 } satisfies Required<TagMappingConfig>;

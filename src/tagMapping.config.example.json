@@ -38,5 +38,9 @@
       "clearOnClose": true,
       "tags": ["进行中", "待审核"]
     }
-  ]
+  ],
+  "statusCommandLabels": {
+    "confirmed": "confirmed",
+    "reopen": "needs triage"
+  }
 }

@@ -47,7 +47,9 @@ import {
   getClosedReasonCommands,
   getClosedReasonLabel,
   getClosedReasonReference,
+  getDiscordTagNameForGithubLabel,
   locksOnClose,
+  tagMapping,
 } from "../tagMapping";
 import { parseDiscordPostId } from "../utils/discordLinks";
 import { areTagSetsEqual } from "../utils/tagSets";
@@ -166,6 +168,19 @@ export async function handleClientReady(client: Client) {
           name: "mention-all",
           description:
             "Mention everyone who has posted in this forum post. (Admin only)",
+          type: ApplicationCommandType.ChatInput,
+          dmPermission: false,
+        },
+        {
+          name: "confirmed",
+          description: "Mark this post as confirmed. (Admin only)",
+          type: ApplicationCommandType.ChatInput,
+          dmPermission: false,
+        },
+        {
+          name: "reopen",
+          description:
+            "Reopen this post and restore its default triage tag. (Admin only)",
           type: ApplicationCommandType.ChatInput,
           dmPermission: false,
         },
@@ -399,6 +414,9 @@ export async function handleInteractionCreate(interaction: Interaction) {
       return handleUnlinkIssueCommand(interaction);
     case "mention-all":
       return handleMentionAllCommand(interaction);
+    case "confirmed":
+    case "reopen":
+      return handleStatusCommand(interaction, interaction.commandName);
   }
 
   // Close commands are config-driven; dispatch by matching the command name
@@ -406,6 +424,160 @@ export async function handleInteractionCreate(interaction: Interaction) {
   const closeReason = getClosedReasonByCommandName(interaction.commandName);
   if (closeReason !== undefined) {
     return handleCloseCommand(interaction, closeReason);
+  }
+}
+
+async function handleStatusCommand(
+  interaction: ChatInputCommandInteraction,
+  command: "confirmed" | "reopen",
+) {
+  let thread: Thread | undefined;
+  try {
+    if (!memberIsAdmin(interaction)) {
+      await interaction.reply({
+        content: "You don't have permission to use this command.",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const channel = await ensureForumThread(interaction);
+    if (!channel) return;
+    await interaction.deferReply();
+
+    const forum = channel.parent;
+    if (!(forum instanceof ForumChannel)) {
+      await interaction.editReply({ content: "This is not a forum channel." });
+      return;
+    }
+
+    const closedIds = Object.values(getClosedStateTagIds(forum)).filter(
+      (id): id is string => Boolean(id),
+    );
+    if (
+      command === "confirmed" &&
+      channel.appliedTags.some((id) => closedIds.includes(id))
+    ) {
+      await interaction.editReply({
+        content: "This post is closed. Use /reopen first.",
+      });
+      return;
+    }
+
+    const targetLabel = tagMapping.statusCommandLabels[command];
+    const targetName = getDiscordTagNameForGithubLabel(targetLabel);
+    const targetId = forum.availableTags.find(
+      (tag) => tag.name === targetName,
+    )?.id;
+    if (!targetId || closedIds.includes(targetId)) {
+      await interaction.editReply({
+        content: `The "${targetName}" status tag is not configured in this forum.`,
+      });
+      return;
+    }
+
+    const statusNames = Object.values(tagMapping.statusCommandLabels).map(
+      getDiscordTagNameForGithubLabel,
+    );
+    const statusIds = forum.availableTags
+      .filter((tag) => statusNames.includes(tag.name))
+      .map((tag) => tag.id);
+    const removedIds = new Set([
+      ...closedIds,
+      ...getClearOnCloseTagIds(forum),
+      ...statusIds,
+    ]);
+    const otherTags = channel.appliedTags.filter((id) => !removedIds.has(id));
+    if (otherTags.length >= 5) {
+      await interaction.editReply({
+        content:
+          "This post already has 5 tags. Remove one tag before changing its status.",
+      });
+      return;
+    }
+    const nextTags = [...otherTags, targetId];
+    const removedTags = channel.appliedTags.filter(
+      (id) => removedIds.has(id) && id !== targetId,
+    );
+    const unlock = command === "reopen" && channel.locked;
+    const unarchive = command === "reopen" && channel.archived;
+
+    thread = store.threads.find((t) => t.id === channel.id);
+    if (!thread) {
+      thread = {
+        id: channel.id,
+        title: channel.name,
+        appliedTags: channel.appliedTags,
+        archived: channel.archived,
+        locked: channel.locked,
+        comments: [],
+      };
+      store.threads.push(thread);
+    }
+
+    // Suppress the gateway echo while this command mirrors its changes itself.
+    thread.pendingDiscordSync = {
+      ...thread.pendingDiscordSync,
+      appliedTags: nextTags,
+      ...(unlock ? { locked: false } : {}),
+      ...(unarchive ? { archived: false } : {}),
+    };
+    await channel.edit({
+      appliedTags: nextTags,
+      ...(unlock ? { locked: false } : {}),
+      ...(unarchive ? { archived: false } : {}),
+    });
+    thread.appliedTags = nextTags;
+    if (unlock) thread.locked = false;
+    if (unarchive) thread.archived = false;
+
+    if (thread.number) {
+      const unlocked = !unlock || (await unlockIssue(thread));
+      const reopened = command !== "reopen" || (await openIssue(thread));
+      if (!unlocked || !reopened) {
+        await interaction.editReply({
+          content:
+            "Post status updated, but GitHub reopen/unlock failed. Please check the logs.",
+        });
+        return;
+      }
+      await removeGithubLabelsForTagIds(thread, forum, removedTags);
+      const labelsAdded = await addLabelsToIssue(thread, [targetLabel]);
+      if (!labelsAdded) {
+        await interaction.editReply({
+          content:
+            "Post status updated, but GitHub label sync failed. Please check the logs.",
+        });
+        return;
+      }
+    }
+    await interaction.editReply({
+      content: `${command === "reopen" ? "Reopened" : "Confirmed"} by <@${interaction.user.id}>. Status: ${targetName}.`,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.stack || err.message : String(err);
+    logger.error(`/${command} handler failed: ${msg}`);
+    const fallback = "Something went wrong while running the command.";
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({ content: fallback });
+      } else {
+        await interaction.reply({ content: fallback, ephemeral: true });
+      }
+    } catch {
+      /* interaction may already be expired */
+    }
+  } finally {
+    if (thread?.pendingDiscordSync) {
+      delete thread.pendingDiscordSync.appliedTags;
+      if (command === "reopen") {
+        delete thread.pendingDiscordSync.locked;
+        delete thread.pendingDiscordSync.archived;
+      }
+      if (Object.keys(thread.pendingDiscordSync).length === 0) {
+        thread.pendingDiscordSync = undefined;
+      }
+    }
   }
 }
 

@@ -1,10 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { deleteIssue, lockIssue, unlockIssue } from "../github/githubActions";
+import { Client, ForumChannel } from "discord.js";
+import {
+  addLabelsToIssue,
+  deleteIssue,
+  lockIssue,
+  openIssue,
+  removeLabelsFromIssue,
+  unlockIssue,
+} from "../github/githubActions";
+import { tagMapping } from "../tagMapping";
 import { store } from "../store";
 import { Thread } from "../interfaces";
 import {
   buildMentionChunks,
   collectThreadParticipantIds,
+  handleClientReady,
+  handleInteractionCreate,
   handleThreadDelete,
   handleThreadUpdate,
 } from "./discordHandlers";
@@ -65,9 +76,307 @@ function trackPost(overrides: Partial<Thread> = {}): Thread {
 
 beforeEach(() => {
   store.threads.length = 0;
-  vi.mocked(lockIssue).mockClear();
-  vi.mocked(unlockIssue).mockClear();
-  vi.mocked(deleteIssue).mockClear();
+  vi.clearAllMocks();
+  vi.mocked(addLabelsToIssue).mockResolvedValue(true);
+  vi.mocked(openIssue).mockResolvedValue(true);
+  vi.mocked(unlockIssue).mockResolvedValue(true);
+});
+
+describe("status commands", () => {
+  const tags = [
+    { id: "done", name: tagMapping.closedState.completed },
+    { id: "invalid", name: tagMapping.closedState.not_planned },
+    { id: "duplicate", name: tagMapping.closedState.duplicate },
+    { id: "triage", name: "needs triage" },
+    { id: "confirmed", name: "confirmed" },
+    { id: "priority", name: "priority: high" },
+  ];
+
+  function statusInteraction(
+    commandName: string,
+    appliedTags: string[],
+    admin = true,
+  ) {
+    const forum = Object.assign(Object.create(ForumChannel.prototype), {
+      availableTags: tags,
+    });
+    const channel = {
+      id: "700000000000000000",
+      name: "a post",
+      parentId: FORUM_ID,
+      parent: forum,
+      appliedTags,
+      archived: false,
+      locked: false,
+      isThread: () => true,
+      edit: vi.fn(async () => undefined),
+    };
+    const interaction = {
+      commandName,
+      channel,
+      isAutocomplete: () => false,
+      isMessageContextMenuCommand: () => false,
+      isChatInputCommand: () => true,
+      memberPermissions: { has: () => admin },
+      inCachedGuild: () => false,
+      user: { id: "admin" },
+      deferred: false,
+      replied: false,
+      reply: vi.fn(),
+      deferReply: vi.fn(async () => {
+        interaction.deferred = true;
+      }),
+      editReply: vi.fn(),
+    };
+    return interaction;
+  }
+
+  async function runCommand(interaction: ReturnType<typeof statusInteraction>) {
+    await handleInteractionCreate(
+      interaction as unknown as Parameters<typeof handleInteractionCreate>[0],
+    );
+  }
+
+  it("registers both commands on startup", async () => {
+    const set = vi.fn();
+    const client = {
+      user: { tag: "test bot" },
+      channels: {
+        fetch: vi.fn(async () => ({
+          availableTags: tags,
+          guild: { id: "guild" },
+        })),
+      },
+      guilds: {
+        cache: new Map([["guild", { name: "test guild", commands: { set } }]]),
+      },
+    } as unknown as Client;
+    await handleClientReady(client);
+    expect(set).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "confirmed" }),
+        expect.objectContaining({ name: "reopen" }),
+      ]),
+    );
+  });
+
+  it("confirms a post and mirrors the status label", async () => {
+    const thread = trackPost({
+      number: 42,
+      appliedTags: ["triage", "priority"],
+    });
+    const interaction = statusInteraction("confirmed", thread.appliedTags);
+    await runCommand(interaction);
+    expect(interaction.channel.edit).toHaveBeenCalledWith({
+      appliedTags: ["priority", "confirmed"],
+    });
+    expect(removeLabelsFromIssue).toHaveBeenCalledWith(thread, [
+      "needs triage",
+    ]);
+    expect(addLabelsToIssue).toHaveBeenCalledWith(thread, ["confirmed"]);
+    expect(openIssue).not.toHaveBeenCalled();
+  });
+
+  it("reopens a closed, locked post with the default tag and preserves priority", async () => {
+    const thread = trackPost({
+      number: 42,
+      appliedTags: ["done", "confirmed", "priority"],
+      locked: true,
+      archived: true,
+    });
+    const interaction = statusInteraction("reopen", thread.appliedTags);
+    interaction.channel.locked = true;
+    interaction.channel.archived = true;
+    await runCommand(interaction);
+    expect(interaction.channel.edit).toHaveBeenCalledWith({
+      appliedTags: ["priority", "triage"],
+      archived: false,
+      locked: false,
+    });
+    expect(openIssue).toHaveBeenCalledWith(thread);
+    expect(unlockIssue).toHaveBeenCalledWith(thread);
+    expect(removeLabelsFromIssue).toHaveBeenCalledWith(thread, ["confirmed"]);
+    expect(addLabelsToIssue).toHaveBeenCalledWith(thread, ["needs triage"]);
+  });
+
+  it("works on posts without a linked issue", async () => {
+    const interaction = statusInteraction("reopen", ["invalid"]);
+    await runCommand(interaction);
+    expect(interaction.channel.edit).toHaveBeenCalledWith({
+      appliedTags: ["triage"],
+    });
+    expect(openIssue).not.toHaveBeenCalled();
+    expect(addLabelsToIssue).not.toHaveBeenCalled();
+  });
+
+  it.each(["confirmed", "reopen"])("rejects non-admin /%s", async (command) => {
+    const interaction = statusInteraction(command, ["done"], false);
+    await runCommand(interaction);
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+    expect(interaction.channel.edit).not.toHaveBeenCalled();
+  });
+
+  it("asks to reopen before confirming a closed post", async () => {
+    const interaction = statusInteraction("confirmed", ["done"]);
+    await runCommand(interaction);
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: "This post is closed. Use /reopen first.",
+    });
+    expect(interaction.channel.edit).not.toHaveBeenCalled();
+  });
+
+  it("does not change the post if its target tag is missing", async () => {
+    const interaction = statusInteraction("reopen", ["done"]);
+    interaction.channel.parent.availableTags = tags.filter(
+      (tag) => tag.id !== "triage",
+    );
+    await runCommand(interaction);
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining("not configured"),
+      }),
+    );
+    expect(interaction.channel.edit).not.toHaveBeenCalled();
+  });
+
+  it("does not mirror changes to GitHub when Discord editing fails", async () => {
+    trackPost({ number: 42, appliedTags: ["done"] });
+    const interaction = statusInteraction("reopen", ["done"]);
+    interaction.channel.edit.mockRejectedValue(
+      new Error("Discord unavailable"),
+    );
+    await runCommand(interaction);
+    expect(openIssue).not.toHaveBeenCalled();
+    expect(addLabelsToIssue).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: "Something went wrong while running the command.",
+    });
+  });
+
+  it("uses deployed label mappings and clears every triage tag", async () => {
+    const previousLabels = tagMapping.labels;
+    const previousGroups = tagMapping.tagGroups;
+    tagMapping.labels = [
+      { github: "confirmed", discord: "已确认" },
+      { github: "needs triage", discord: "需要分拣" },
+      { github: "needs info", discord: "需要信息" },
+    ];
+    tagMapping.tagGroups = [
+      { name: "triage", clearOnClose: true, tags: ["需要分拣", "需要信息"] },
+    ];
+    try {
+      const thread = trackPost({
+        number: 42,
+        appliedTags: ["triage", "info", "priority"],
+      });
+      const interaction = statusInteraction("confirmed", thread.appliedTags);
+      interaction.channel.parent.availableTags = [
+        ...tags.filter((tag) => !["triage", "confirmed"].includes(tag.id)),
+        { id: "triage", name: "需要分拣" },
+        { id: "info", name: "需要信息" },
+        { id: "confirmed", name: "已确认" },
+      ];
+      await runCommand(interaction);
+      expect(interaction.channel.edit).toHaveBeenCalledWith({
+        appliedTags: ["priority", "confirmed"],
+      });
+      expect(removeLabelsFromIssue).toHaveBeenCalledWith(thread, [
+        "needs triage",
+        "needs info",
+      ]);
+      expect(addLabelsToIssue).toHaveBeenCalledWith(thread, ["confirmed"]);
+    } finally {
+      tagMapping.labels = previousLabels;
+      tagMapping.tagGroups = previousGroups;
+    }
+  });
+
+  it("keeps unrelated tags when Discord's tag limit would be exceeded", async () => {
+    const interaction = statusInteraction("reopen", ["a", "b", "c", "d", "e"]);
+    await runCommand(interaction);
+    expect(interaction.channel.edit).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.stringContaining("5 tags") }),
+    );
+  });
+
+  it("reports a GitHub label sync failure without claiming full success", async () => {
+    trackPost({ number: 42, appliedTags: ["triage"] });
+    vi.mocked(addLabelsToIssue).mockResolvedValue(false);
+    const interaction = statusInteraction("confirmed", ["triage"]);
+    await runCommand(interaction);
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content:
+        "Post status updated, but GitHub label sync failed. Please check the logs.",
+    });
+  });
+
+  it.each(["open", "unlock"])("reports a failed GitHub %s", async (action) => {
+    trackPost({ number: 42, appliedTags: ["done"], locked: true });
+    const interaction = statusInteraction("reopen", ["done"]);
+    interaction.channel.locked = true;
+    vi.mocked(action === "open" ? openIssue : unlockIssue).mockResolvedValue(
+      false,
+    );
+    await runCommand(interaction);
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content:
+        "Post status updated, but GitHub reopen/unlock failed. Please check the logs.",
+    });
+    expect(addLabelsToIssue).not.toHaveBeenCalled();
+  });
+
+  it("suppresses gateway echoes so a reopen is mirrored only once", async () => {
+    const thread = trackPost({
+      number: 42,
+      appliedTags: ["done"],
+      locked: true,
+    });
+    const interaction = statusInteraction("reopen", ["done"]);
+    interaction.channel.locked = true;
+    interaction.channel.edit.mockImplementation(async () => {
+      await handleThreadUpdate({
+        id: thread.id,
+        parentId: FORUM_ID,
+        fetch: async () => ({
+          parent: interaction.channel.parent,
+          appliedTags: ["triage"],
+          members: {
+            thread: { id: thread.id, archived: false, locked: false },
+          },
+        }),
+      } as unknown as Parameters<typeof handleThreadUpdate>[0]);
+    });
+    await runCommand(interaction);
+    expect(openIssue).toHaveBeenCalledOnce();
+    expect(unlockIssue).toHaveBeenCalledOnce();
+    expect(thread.pendingDiscordSync).toBeUndefined();
+    expect(thread.appliedTags).toEqual(["triage"]);
+  });
+
+  it.each(["done", "invalid", "duplicate"])(
+    "reopens the %s closed-state reason",
+    async (closedTag) => {
+      const interaction = statusInteraction("reopen", [closedTag, "priority"]);
+      await runCommand(interaction);
+      expect(interaction.channel.edit).toHaveBeenCalledWith({
+        appliedTags: ["priority", "triage"],
+      });
+    },
+  );
+
+  it("rejects commands outside a configured forum post", async () => {
+    const interaction = statusInteraction("reopen", ["done"]);
+    interaction.channel.parentId = "another-forum";
+    await runCommand(interaction);
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: "This command must be used inside a forum post.",
+      ephemeral: true,
+    });
+    expect(interaction.channel.edit).not.toHaveBeenCalled();
+  });
 });
 
 describe("handleThreadUpdate lock mirroring", () => {

@@ -179,12 +179,12 @@ export async function closeIssue(thread: Thread, reason?: ClosedReason) {
   else error("Failed to close issue due to an unknown error", thread);
 }
 
-export async function openIssue(thread: Thread) {
+export async function openIssue(thread: Thread): Promise<boolean> {
   const { number: issue_number } = thread;
 
   if (!issue_number) {
     error("Thread does not have an issue number", thread);
-    return;
+    return false;
   }
 
   const response = await update(issue_number, "open");
@@ -193,9 +193,11 @@ export async function openIssue(thread: Thread) {
     // Drop any closed-state mirror labels (e.g. "duplicate") on reopen.
     const labels = getAllClosedStateGithubLabels();
     if (labels.length) await removeLabelsFromIssue(thread, labels);
+    return true;
   } else if (response instanceof Error)
     error(`Failed to open issue: ${response.message}`, thread);
   else error("Failed to open issue due to an unknown error", thread);
+  return false;
 }
 
 export async function lockIssue(thread: Thread) {
@@ -221,11 +223,11 @@ export async function lockIssue(thread: Thread) {
   }
 }
 
-export async function unlockIssue(thread: Thread) {
+export async function unlockIssue(thread: Thread): Promise<boolean> {
   const { number: issue_number } = thread;
   if (!issue_number) {
     error("Thread does not have an issue number", thread);
-    return;
+    return false;
   }
 
   try {
@@ -235,12 +237,14 @@ export async function unlockIssue(thread: Thread) {
     });
 
     info(Actions.Unlocked, thread);
+    return true;
   } catch (err) {
     if (err instanceof Error) {
       error(`Failed to unlock issue: ${err.message}`, thread);
     } else {
       error("Failed to unlock issue due to an unknown error", thread);
     }
+    return false;
   }
 }
 
