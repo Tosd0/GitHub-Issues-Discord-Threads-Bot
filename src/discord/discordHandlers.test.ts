@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client, ForumChannel } from "discord.js";
 import {
   addLabelsToIssue,
@@ -74,12 +74,28 @@ function trackPost(overrides: Partial<Thread> = {}): Thread {
   return thread;
 }
 
+const deployedLabels = tagMapping.labels;
+const deployedGroups = tagMapping.tagGroups;
+const deployedStatusLabels = tagMapping.statusCommandLabels;
+
 beforeEach(() => {
   store.threads.length = 0;
+  tagMapping.labels = [];
+  tagMapping.tagGroups = [];
+  tagMapping.statusCommandLabels = {
+    confirmed: "confirmed",
+    reopen: "needs triage",
+  };
   vi.clearAllMocks();
   vi.mocked(addLabelsToIssue).mockResolvedValue(true);
   vi.mocked(openIssue).mockResolvedValue(true);
   vi.mocked(unlockIssue).mockResolvedValue(true);
+});
+
+afterEach(() => {
+  tagMapping.labels = deployedLabels;
+  tagMapping.tagGroups = deployedGroups;
+  tagMapping.statusCommandLabels = deployedStatusLabels;
 });
 
 describe("status commands", () => {
