@@ -27,6 +27,39 @@ This Discord bot serves as a seamless bridge between Discord thread channel and 
   post, post author included. Bots are skipped; long lists are split across
   several messages.
 
+#### Knowledge base
+
+Save tutorial links or reusable text once, then send them manually into a post:
+
+- `/knowledge add name:debug panel text:<tutorial link or text>` adds an entry.
+- `/send name:debug panel` publishes its exact saved text in the current post.
+- `/knowledge edit name:debug panel text:<replacement>` updates its content.
+- `/knowledge rename name:debug panel new-name:<new name>` renames the entry.
+- `/knowledge delete name:debug panel` removes the entry.
+- `/knowledge show name:debug panel` previews the content privately.
+- `/knowledge list page:1` lists entries privately, 15 per page.
+
+All commands require Administrator permission or a role configured in
+`DISCORD_ADMIN_ROLE_IDS`. `/send` only works in posts under a configured forum;
+management commands work elsewhere in the server too. No linked GitHub issue is
+required. Names can contain spaces and are matched without regard to case.
+Existing names are suggested as you type for send, show, edit, rename, and
+delete; changes appear immediately without restarting the bot. Each server has
+its own entries, shared across that server's configured forums.
+
+Content supports links, Discord post URLs, Markdown, and text, up to 2000
+characters. Register existing tutorial links manually with `add`; the bot does
+not scan channel history. Only `/send` publishes saved content; management
+responses and send confirmations are private. Mentions in saved text do not
+ping users or roles. Ordinary messages never trigger knowledge responses.
+
+Entries persist in `data/knowledge-base.json`, or the path set in
+`KNOWLEDGE_BASE_FILE`. Keep the file across deployments, use a persistent volume
+in containers, and run only one bot instance against it. The bot needs write
+access to the containing directory. Updates use atomic file replacement; invalid
+existing data is left untouched and commands report an error. Back up this file
+along with `data/completed-threads.json`.
+
 #### Comments
 
 - \[x] Discord Post Comments -> Pushed to the linked GitHub issue on demand
@@ -181,7 +214,7 @@ events, so selecting the GitHub webhook "Issues" event category is enough.
 
 Issue open/close state is mirrored through the `closedState` tags above, **not**
 through the archived/active state of the Discord post. Closing a GitHub issue
-applies the matching closed-state tag to the post (the post is _not_ archived);
+applies the matching closed-state tag to the post (it is not archived immediately);
 reopening removes it. This avoids a pitfall where a forum post auto-unarchives
 as soon as anyone posts a message, which used to be synced back as a reopen.
 
@@ -196,6 +229,52 @@ as soon as anyone posts a message, which used to be synced back as a reopen.
   reply links that post, and if both posts are linked to issues it also leaves a
   `Duplicate of #N` note on the GitHub issue. Configured under
   `closedStateCommands` (see Tags & Labels).
+
+`/close` is an admin-only command that immediately archives the current forum
+post. It replies privately to the command user and leaves tags, the lock state,
+and the linked GitHub issue unchanged. It also works on unlinked or unresolved
+posts. Use `/complete`, `/invalid`, or `/duplicate` to apply a closed-state
+reason and start the two-day countdown instead.
+
+#### Closed-post reminders and delayed archiving
+
+When a post receives any configured `closedState` tag, the bot sends a notice
+using that tag's name, for example:
+
+> 此帖子已被标记为无效。若2天内无新问题则会被折叠（关闭）。
+
+This works for manual tags, `/complete`, `/invalid`, `/duplicate`, and GitHub
+closure sync, including posts without a linked GitHub issue. Two days after
+the notice was actually sent, the bot checks the current tags and archives the
+post if it still has a closed-state tag. The post's creation date does not
+matter. Checks run every minute; downtime or API failures can delay archiving.
+The archiver does not change the lock or GitHub issue state. `/duplicate` still
+locks the post as configured by its existing command behavior.
+
+Removing all closed-state tags (manually, via `/reopen`, or via GitHub) cancels
+the countdown. Closing the post again sends a new notice and starts a fresh two
+days. Switching between closed-state reasons, ordinary replies, and unrelated
+tag changes do not extend the deadline. Duplicate events and repeated close
+commands do not repeat the notice. After archiving, a reply may unarchive an
+unlocked post; the bot does not archive it again unless the closed-state tags
+are removed and added back.
+
+Countdowns are saved to `data/completed-threads.json` by default. Set
+`COMPLETED_THREADS_STATE_FILE` to use another location. Keep this file across
+restarts and deployments, use persistent storage in containers, and run only
+one bot instance against it. The bot needs write access to the containing
+directory. Invalid state is logged and left untouched rather than overwritten.
+
+Startup recovers saved countdowns, including archived posts. Active posts with
+a closed-state tag but no saved record receive a new notice and a full two days;
+historical archived posts without records are not backfilled. While offline,
+the bot cannot reconstruct a tag that was removed and added back before it
+reconnected; only the final tag state and saved countdown are available.
+
+The bot needs View Channel, Read Message History, Send Messages in Threads,
+and Manage Threads in the configured forums. Read Message History is used to
+recover a notice after a lost send response. No privileged intents are needed.
+Discord's own inactivity archiving can still hide/archive a post earlier.
 
 #### Deletion Actions
 

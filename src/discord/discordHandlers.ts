@@ -54,6 +54,12 @@ import {
 import { parseDiscordPostId } from "../utils/discordLinks";
 import { areTagSetsEqual } from "../utils/tagSets";
 import { Thread } from "../interfaces";
+import { completionArchiver } from "./discord";
+import {
+  handleKnowledgeAutocomplete,
+  handleKnowledgeCommand,
+  knowledgeCommands,
+} from "./knowledgeCommands";
 
 export async function handleClientReady(client: Client) {
   logger.info(`Logged in as ${client.user?.tag}!`);
@@ -105,6 +111,7 @@ export async function handleClientReady(client: Client) {
     if (!guild) continue;
     try {
       await guild.commands.set([
+        ...knowledgeCommands,
         {
           // Message context menu rather than a slash command: the interaction
           // payload carries the post's text and attachments, so the bot needs
@@ -172,6 +179,13 @@ export async function handleClientReady(client: Client) {
           dmPermission: false,
         },
         {
+          name: "close",
+          description:
+            "Archive this post without changing its tags or issue. (Admin only)",
+          type: ApplicationCommandType.ChatInput,
+          dmPermission: false,
+        },
+        {
           name: "confirmed",
           description: "Mark this post as confirmed. (Admin only)",
           type: ApplicationCommandType.ChatInput,
@@ -231,6 +245,7 @@ export async function handleThreadCreate(params: AnyThreadChannel) {
     locked: false,
     comments: [],
   });
+  await completionArchiver.observe(params);
 }
 
 export async function handleChannelUpdate(
@@ -312,10 +327,16 @@ async function syncAppliedTagsToGithub(
   }
 }
 
-export async function handleThreadUpdate(params: AnyThreadChannel) {
+export async function handleThreadUpdate(
+  params: AnyThreadChannel,
+  completionUpdate?: Promise<void>,
+) {
   if (!params.parentId || !config.DISCORD_CHANNEL_IDS.includes(params.parentId))
     return;
 
+  // Completion reminders also apply to unlinked posts and bot-originated tags.
+  // Observe before issue-cache guards and Discord↔GitHub echo suppression.
+  await (completionUpdate ?? completionArchiver.observe(params));
   const latest = await fetchLatestThreadChannel(params);
   if (!latest) return;
 
@@ -370,6 +391,7 @@ export async function handleThreadDelete(params: AnyThreadChannel) {
   if (!params.parentId || !config.DISCORD_CHANNEL_IDS.includes(params.parentId))
     return;
 
+  await completionArchiver.forget(params.id);
   const thread = store.threads.find((item) => item.id === params.id);
   if (!thread) return;
 
@@ -385,6 +407,16 @@ function issueUrl(number: number) {
 
 export async function handleInteractionCreate(interaction: Interaction) {
   if (interaction.isAutocomplete()) {
+    if (
+      interaction.commandName === "send" ||
+      interaction.commandName === "knowledge"
+    ) {
+      await handleKnowledgeAutocomplete(
+        interaction,
+        memberIsAdmin(interaction),
+      );
+      return;
+    }
     if (interaction.commandName === "add-tag") {
       await handleAddTagAutocomplete(interaction);
     }
@@ -404,6 +436,9 @@ export async function handleInteractionCreate(interaction: Interaction) {
   if (!interaction.isChatInputCommand()) return;
 
   switch (interaction.commandName) {
+    case "send":
+    case "knowledge":
+      return handleKnowledgeCommand(interaction, memberIsAdmin(interaction));
     case "subscribe-issue":
       return handleSubscribeIssueCommand(interaction);
     case "add-tag":
@@ -414,6 +449,8 @@ export async function handleInteractionCreate(interaction: Interaction) {
       return handleUnlinkIssueCommand(interaction);
     case "mention-all":
       return handleMentionAllCommand(interaction);
+    case "close":
+      return handleArchiveCommand(interaction);
     case "confirmed":
     case "reopen":
       return handleStatusCommand(interaction, interaction.commandName);
@@ -424,6 +461,48 @@ export async function handleInteractionCreate(interaction: Interaction) {
   const closeReason = getClosedReasonByCommandName(interaction.commandName);
   if (closeReason !== undefined) {
     return handleCloseCommand(interaction, closeReason);
+  }
+}
+
+async function handleArchiveCommand(interaction: ChatInputCommandInteraction) {
+  try {
+    if (!memberIsAdmin(interaction)) {
+      await interaction.reply({
+        content: "You don't have permission to use this command.",
+        ephemeral: true,
+      });
+      return;
+    }
+    const channel = await ensureForumThread(interaction);
+    if (!channel) return;
+    if (channel.archived) {
+      await interaction.reply({
+        content: "此帖子已经关闭（归档）。",
+        ephemeral: true,
+      });
+      return;
+    }
+
+    // A private response avoids posting a message that would reopen the thread.
+    await interaction.deferReply({ ephemeral: true });
+    await channel.edit({ archived: true });
+    const thread = store.threads.find((item) => item.id === channel.id);
+    if (thread) thread.archived = true;
+    await interaction.editReply({ content: "此帖子已关闭（归档）。" });
+  } catch (err) {
+    logger.error(
+      `/close handler failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    const content = "关闭帖子失败，请检查机器人的管理线程权限或稍后重试。";
+    try {
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({ content });
+      } else {
+        await interaction.reply({ content, ephemeral: true });
+      }
+    } catch {
+      /* interaction may already be expired */
+    }
   }
 }
 
@@ -531,6 +610,8 @@ async function handleStatusCommand(
     if (unlock) thread.locked = false;
     if (unarchive) thread.archived = false;
 
+    await completionArchiver.observe(channel);
+
     if (thread.number) {
       const unlocked = !unlock || (await unlockIssue(thread));
       const reopened = command !== "reopen" || (await openIssue(thread));
@@ -612,6 +693,7 @@ async function handleAddTagAutocomplete(interaction: AutocompleteInteraction) {
 function memberIsAdmin(
   interaction:
     | ChatInputCommandInteraction
+    | AutocompleteInteraction
     | MessageContextMenuCommandInteraction,
 ): boolean {
   const hasAdminPerm =
@@ -1222,6 +1304,7 @@ async function handleCloseCommand(
     // Apply the closed-state tag only; the tag drives the GitHub close. We do
     // not archive the thread (archiving is no longer tied to issue state).
     await channel.edit({ appliedTags: nextTags });
+    await completionArchiver.observe(channel);
 
     // The Discord tag change does not push label removals to GitHub on its
     // own, so mirror the cleared in-progress tags by removing their labels.

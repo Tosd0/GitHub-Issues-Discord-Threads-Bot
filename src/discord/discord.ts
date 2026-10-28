@@ -7,6 +7,8 @@ import {
 import { config } from "../config";
 import { logger } from "../logger";
 import { createSerialQueue } from "../utils/serialQueue";
+import { areTagSetsEqual } from "../utils/tagSets";
+import { CompletedThreadArchiver } from "./completedThreads";
 import {
   handleChannelUpdate,
   handleClientReady,
@@ -40,6 +42,12 @@ const client = new Client({
   },
 });
 
+export const completionArchiver = new CompletedThreadArchiver(
+  client,
+  config.COMPLETED_THREADS_STATE_FILE,
+  (message) => logger.error(message),
+);
+
 let _bootstrapped = false;
 export const isDiscordBootstrapped = () => _bootstrapped;
 
@@ -50,15 +58,32 @@ export function initDiscord() {
     try {
       await handleClientReady(c);
       _bootstrapped = true;
+      await completionArchiver.start();
     } catch (err) {
       const msg = err instanceof Error ? err.stack || err.message : String(err);
       logger.error(`Discord bootstrap failed: ${msg}`);
     }
   });
   client.on(Events.ThreadCreate, handleThreadCreate);
-  client.on(Events.ThreadUpdate, (_oldThread, newThread) => {
+  client.on(Events.ThreadUpdate, (oldThread, newThread) => {
+    if (
+      !newThread.parentId ||
+      !config.DISCORD_CHANNEL_IDS.includes(newThread.parentId)
+    )
+      return;
+    // Capture each tag transition immediately; queued GitHub work may outlive
+    // another update to this same mutable discord.js channel object.
+    const tagsChanged = !areTagSetsEqual(
+      oldThread.appliedTags,
+      newThread.appliedTags,
+    );
+    // Archiving an old closed post must not send a new notice and reopen it.
+    const completionUpdate = completionArchiver.observe(
+      newThread,
+      tagsChanged || !newThread.archived,
+    );
     void enqueueThreadUpdate(newThread.id, () =>
-      handleThreadUpdate(newThread),
+      handleThreadUpdate(newThread, completionUpdate),
     ).catch((err) => {
       const msg = err instanceof Error ? err.stack || err.message : String(err);
       logger.error(`Thread update handler failed: ${msg}`);

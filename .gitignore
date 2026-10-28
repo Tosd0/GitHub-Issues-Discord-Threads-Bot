@@ -9,3 +9,4 @@ src/tagMapping.config.json
 
 dist
 logs
+data/

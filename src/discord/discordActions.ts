@@ -19,7 +19,7 @@ import {
 } from "../tagMapping";
 import { removeLabelsFromIssue } from "../github/githubActions";
 import { areTagSetsEqual } from "../utils/tagSets";
-import client from "./discord";
+import client, { completionArchiver } from "./discord";
 
 type PendingDiscordSyncField = "appliedTags" | "archived" | "locked";
 
@@ -326,8 +326,8 @@ export async function addClosedStateTag(
   }
 
   // Closed state is mutually exclusive; only one closed-state tag at a time.
-  const closedIds = Object.values(ids).filter(
-    (id): id is string => Boolean(id),
+  const closedIds = Object.values(ids).filter((id): id is string =>
+    Boolean(id),
   );
   // Closing a post clears any in-progress (clear-on-close) tags on both sides.
   const clearIds = getClearOnCloseTagIds(forum);
@@ -336,7 +336,10 @@ export async function addClosedStateTag(
   );
 
   const alreadyTagged = channel.appliedTags.includes(targetId);
-  if (alreadyTagged && removedClearTags.length === 0) return;
+  if (alreadyTagged && removedClearTags.length === 0) {
+    await completionArchiver.observe(channel);
+    return;
+  }
 
   const next = [
     ...channel.appliedTags.filter(
@@ -363,6 +366,7 @@ export async function addClosedStateTag(
   // Otherwise the sides diverge: Discord keeps the tag while GitHub loses the
   // label.
   if (tagsApplied) {
+    await completionArchiver.observe(channel);
     await removeGithubLabelsForTagIds(thread, forum, removedClearTags);
   }
 }
@@ -375,19 +379,23 @@ export async function removeClosedStateTag(node_id: string | undefined) {
   if (!(forum instanceof ForumChannel)) return;
 
   const ids = getClosedStateTagIds(forum);
-  const targetIds = Object.values(ids).filter(
-    (id): id is string => Boolean(id),
+  const targetIds = Object.values(ids).filter((id): id is string =>
+    Boolean(id),
   );
   if (targetIds.length === 0) return;
 
   const next = channel.appliedTags.filter((id) => !targetIds.includes(id));
-  if (next.length === channel.appliedTags.length) return;
+  if (next.length === channel.appliedTags.length) {
+    await completionArchiver.observe(channel);
+    return;
+  }
 
   setPendingDiscordSync(thread, { appliedTags: next });
   try {
     await channel.setAppliedTags(next);
     thread.appliedTags = next;
     info(Actions.Reopened, thread);
+    await completionArchiver.observe(channel);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown error";
     logger.error(`Failed to remove closed-state tag: ${msg}`);

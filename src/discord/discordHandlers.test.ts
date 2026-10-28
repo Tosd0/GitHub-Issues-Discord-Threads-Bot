@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client, ForumChannel } from "discord.js";
 import {
   addLabelsToIssue,
+  closeIssue,
   deleteIssue,
   lockIssue,
   openIssue,
@@ -11,14 +12,25 @@ import {
 import { tagMapping } from "../tagMapping";
 import { store } from "../store";
 import { Thread } from "../interfaces";
+import client, { completionArchiver } from "./discord";
+import { addClosedStateTag, removeClosedStateTag } from "./discordActions";
 import {
   buildMentionChunks,
   collectThreadParticipantIds,
   handleClientReady,
   handleInteractionCreate,
   handleThreadDelete,
+  handleThreadCreate,
   handleThreadUpdate,
 } from "./discordHandlers";
+
+vi.mock("./discord", () => ({
+  default: { channels: { cache: new Map(), fetch: vi.fn() } },
+  completionArchiver: {
+    observe: vi.fn(async () => undefined),
+    forget: vi.fn(async () => undefined),
+  },
+}));
 
 // Every GitHub call is stubbed; these tests are about which of them the
 // Discord-side handlers decide to make.
@@ -80,6 +92,7 @@ const deployedStatusLabels = tagMapping.statusCommandLabels;
 
 beforeEach(() => {
   store.threads.length = 0;
+  client.channels.cache.clear();
   tagMapping.labels = [];
   tagMapping.tagGroups = [];
   tagMapping.statusCommandLabels = {
@@ -125,7 +138,12 @@ describe("status commands", () => {
       archived: false,
       locked: false,
       isThread: () => true,
-      edit: vi.fn(async () => undefined),
+      setLocked: vi.fn(async (locked: boolean) => {
+        channel.locked = locked;
+      }),
+      edit: vi.fn(async (options: object) => {
+        Object.assign(channel, options);
+      }),
     };
     const interaction = {
       commandName,
@@ -133,6 +151,7 @@ describe("status commands", () => {
       isAutocomplete: () => false,
       isMessageContextMenuCommand: () => false,
       isChatInputCommand: () => true,
+      options: { getString: () => null },
       memberPermissions: { has: () => admin },
       inCachedGuild: () => false,
       user: { id: "admin" },
@@ -153,7 +172,7 @@ describe("status commands", () => {
     );
   }
 
-  it("registers both commands on startup", async () => {
+  it("registers status and manual archive commands on startup", async () => {
     const set = vi.fn();
     const client = {
       user: { tag: "test bot" },
@@ -172,8 +191,96 @@ describe("status commands", () => {
       expect.arrayContaining([
         expect.objectContaining({ name: "confirmed" }),
         expect.objectContaining({ name: "reopen" }),
+        expect.objectContaining({ name: "close" }),
+        expect.objectContaining({
+          name: "send",
+          options: [
+            expect.objectContaining({ name: "name", autocomplete: true }),
+          ],
+        }),
+        expect.objectContaining({
+          name: "knowledge",
+          options: expect.arrayContaining([
+            expect.objectContaining({ name: "add" }),
+            expect.objectContaining({ name: "edit" }),
+            expect.objectContaining({ name: "rename" }),
+            expect.objectContaining({ name: "delete" }),
+            expect.objectContaining({ name: "list" }),
+            expect.objectContaining({ name: "show" }),
+          ]),
+        }),
       ]),
     );
+  });
+
+  it("/close archives a linked post with a private reply and preserves its tags and lock", async () => {
+    const thread = trackPost({
+      number: 42,
+      appliedTags: ["done", "priority"],
+      locked: true,
+    });
+    const interaction = statusInteraction("close", thread.appliedTags);
+    interaction.channel.locked = true;
+    await runCommand(interaction);
+    expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(interaction.channel.edit).toHaveBeenCalledWith({ archived: true });
+    expect(interaction.channel.appliedTags).toEqual(["done", "priority"]);
+    expect(interaction.channel.locked).toBe(true);
+    expect(thread.archived).toBe(true);
+    expect(closeIssue).not.toHaveBeenCalled();
+    expect(completionArchiver.observe).not.toHaveBeenCalled();
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: "此帖子已关闭（归档）。",
+    });
+  });
+
+  it("/close also archives an unlinked, unresolved post", async () => {
+    const interaction = statusInteraction("close", ["triage"]);
+    await runCommand(interaction);
+    expect(interaction.channel.edit).toHaveBeenCalledWith({ archived: true });
+    expect(interaction.channel.appliedTags).toEqual(["triage"]);
+    expect(closeIssue).not.toHaveBeenCalled();
+  });
+
+  it("rejects /close from non-admins", async () => {
+    const interaction = statusInteraction("close", [], false);
+    await runCommand(interaction);
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+    expect(interaction.channel.edit).not.toHaveBeenCalled();
+  });
+
+  it("rejects /close outside a configured forum", async () => {
+    const interaction = statusInteraction("close", []);
+    interaction.channel.parentId = "other-forum";
+    await runCommand(interaction);
+    expect(interaction.reply).toHaveBeenCalledWith(
+      expect.objectContaining({ ephemeral: true }),
+    );
+    expect(interaction.channel.edit).not.toHaveBeenCalled();
+  });
+
+  it("reports /close failures without claiming the post was archived", async () => {
+    const interaction = statusInteraction("close", []);
+    interaction.channel.edit.mockRejectedValue(
+      new Error("Missing permissions"),
+    );
+    await runCommand(interaction);
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: "关闭帖子失败，请检查机器人的管理线程权限或稍后重试。",
+    });
+  });
+
+  it("does not edit an already archived post for /close", async () => {
+    const interaction = statusInteraction("close", []);
+    interaction.channel.archived = true;
+    await runCommand(interaction);
+    expect(interaction.reply).toHaveBeenCalledWith({
+      content: "此帖子已经关闭（归档）。",
+      ephemeral: true,
+    });
+    expect(interaction.channel.edit).not.toHaveBeenCalled();
   });
 
   it("confirms a post and mirrors the status label", async () => {
@@ -223,6 +330,40 @@ describe("status commands", () => {
     });
     expect(openIssue).not.toHaveBeenCalled();
     expect(addLabelsToIssue).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["complete", "done"],
+    ["invalid", "invalid"],
+    ["duplicate", "duplicate"],
+  ])(
+    "observes /%s even without a linked issue or a gateway event",
+    async (command, tag) => {
+      const interaction = statusInteraction(command, ["priority"]);
+      await runCommand(interaction);
+      expect(completionArchiver.observe).toHaveBeenCalledWith(
+        expect.objectContaining({ appliedTags: ["priority", tag] }),
+      );
+    },
+  );
+
+  it("cancels the countdown on /reopen before GitHub sync can fail", async () => {
+    trackPost({ number: 42, appliedTags: ["done"] });
+    vi.mocked(openIssue).mockResolvedValue(false);
+    const interaction = statusInteraction("reopen", ["done"]);
+    await runCommand(interaction);
+    expect(completionArchiver.observe).toHaveBeenCalledWith(
+      expect.objectContaining({ appliedTags: ["triage"] }),
+    );
+  });
+
+  it("does not start a countdown when /complete cannot apply the tag", async () => {
+    const interaction = statusInteraction("complete", []);
+    interaction.channel.edit.mockRejectedValue(
+      new Error("Discord unavailable"),
+    );
+    await runCommand(interaction);
+    expect(completionArchiver.observe).not.toHaveBeenCalled();
   });
 
   it.each(["confirmed", "reopen"])("rejects non-admin /%s", async (command) => {
@@ -392,6 +533,52 @@ describe("status commands", () => {
       ephemeral: true,
     });
     expect(interaction.channel.edit).not.toHaveBeenCalled();
+  });
+});
+
+describe("completion lifecycle integration", () => {
+  it("observes manual tag updates even when the post is absent from the issue store", async () => {
+    const channel = forumPost("unlinked", false);
+    channel.appliedTags = ["done"];
+    await handleThreadUpdate(channel);
+    expect(completionArchiver.observe).toHaveBeenCalledWith(channel);
+  });
+
+  it("observes posts created with a completion tag", async () => {
+    const channel = forumPost("new-post", false);
+    channel.appliedTags = ["done"];
+    await handleThreadCreate(channel);
+    expect(completionArchiver.observe).toHaveBeenCalledWith(channel);
+  });
+
+  it("forgets deleted posts even when they are not in the issue store", async () => {
+    await handleThreadDelete(forumPost("unlinked", false));
+    expect(completionArchiver.forget).toHaveBeenCalledWith("unlinked");
+  });
+
+  it("observes GitHub completion and reopening despite gateway echo suppression", async () => {
+    const thread = trackPost({ node_id: "I_node_id" });
+    const channel = {
+      id: thread.id,
+      parentId: FORUM_ID,
+      parent: Object.assign(Object.create(ForumChannel.prototype), {
+        availableTags: [{ id: "done", name: tagMapping.closedState.completed }],
+      }),
+      appliedTags: [] as string[],
+      setAppliedTags: vi.fn(async (tags: string[]) => {
+        channel.appliedTags = tags;
+      }),
+    };
+    client.channels.cache.set(thread.id, channel as never);
+    await addClosedStateTag(thread.node_id, "completed");
+    expect(completionArchiver.observe).toHaveBeenCalledWith(
+      expect.objectContaining({ appliedTags: ["done"] }),
+    );
+    vi.mocked(completionArchiver.observe).mockClear();
+    await removeClosedStateTag(thread.node_id);
+    expect(completionArchiver.observe).toHaveBeenCalledWith(
+      expect.objectContaining({ appliedTags: [] }),
+    );
   });
 });
 

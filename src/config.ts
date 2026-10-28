@@ -38,4 +38,9 @@ export const config = {
     .map((id) => id.trim())
     .filter((id) => id.length > 0),
   GITHUB_WEBHOOK_SECRET: (GITHUB_WEBHOOK_SECRET ?? "").trim(),
+  COMPLETED_THREADS_STATE_FILE:
+    process.env.COMPLETED_THREADS_STATE_FILE?.trim() ||
+    "data/completed-threads.json",
+  KNOWLEDGE_BASE_FILE:
+    process.env.KNOWLEDGE_BASE_FILE?.trim() || "data/knowledge-base.json",
 };
